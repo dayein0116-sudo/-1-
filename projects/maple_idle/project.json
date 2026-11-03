@@ -1,0 +1,24 @@
+{
+  "id": "maple_idle",
+  "name": "메이플 키우기",
+  "game": "메이플 키우기",
+  "data_source": "Sensor Tower 추정치",
+  "data_note": "원본 CSV의 통화·플랫폼·집계 범위는 확인되지 않았습니다.",
+  "files": {
+    "revenue": "revenue.csv",
+    "dau": "dau.csv",
+    "updates": "updates.json"
+  },
+  "categories": [
+    "신규 직업·동료",
+    "성장 시스템",
+    "경쟁·엔드 콘텐츠",
+    "신규 BM 가능성(공지 표기 기준)",
+    "재화 공급·소비",
+    "이벤트",
+    "편의성 개선",
+    "기존 콘텐츠 확장"
+  ],
+  "max_countries": 10,
+  "common_countries": ["대한민국", "미국", "대만", "싱가포르", "태국"]
+}

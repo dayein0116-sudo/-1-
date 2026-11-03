@@ -1,0 +1,25 @@
+{
+  "id": "cookierun_crumble",
+  "name": "쿠키런: 크럼블",
+  "game": "쿠키런: 크럼블",
+  "data_source": "Sensor Tower 추정치",
+  "data_note": "원본 CSV의 통화·플랫폼·집계 범위는 확인되지 않았습니다.",
+  "files": {
+    "revenue": "revenue.csv",
+    "dau": "dau.csv",
+    "updates": "updates.json"
+  },
+  "categories": [
+    "신규 캐릭터·수집",
+    "성장 시스템",
+    "경쟁·엔드 콘텐츠",
+    "신규 BM 가능성(공지 표기 기준)",
+    "재화 공급·소비",
+    "이벤트",
+    "편의성 개선",
+    "장기 잔존 전략"
+  ],
+  "type_rule": "메이저 = 신규 TSSR·전용 뽑기·신규 경쟁 콘텐츠 묶음이 있는 업데이트 / 마이너 = 그 외 (공지 구성을 기준으로 사후 부여한 탐색적 분류)",
+  "max_countries": 12,
+  "common_countries": ["대만", "대한민국", "미국", "싱가포르", "일본", "태국"]
+}

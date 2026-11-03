@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/secrets.toml
+.env
+
+# 임시 업로드 버퍼 (로컬 보존, 배포 제외)
+incoming/
+projects/*/incoming/
+
+# 대용량 문서 파일 (GitHub 100MB 한도 초과)
+*.docx
+*.xlsx
+*.pptx
