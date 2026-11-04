@@ -25,7 +25,7 @@ def _hero(env):
         f'<div class="dt">{d:%Y.%m.%d} ({"월화수목금토일"[d.dayofweek]})</div>'
         f'<div class="ti">{esc(u["title"])}</div>'
         f'<div style="margin-top:6px"><span class="badge gray">{esc(rep["scope_label"])}</span>'
-        f'<span class="badge gray">이전 {rep["window"]}일 vs 이후 {rep["window"]}일</span>'
+        f'<span class="badge gray">전주 대비 업데이트 주 비교</span>'
         f'<span class="badge gray">공지 항목 {n_items}개</span></div>'
         f'</div>',
         unsafe_allow_html=True)
@@ -34,7 +34,7 @@ def _hero(env):
             f'<div class="muted" style="margin-bottom:6px">{esc(env.scope_note)}</div>'
             + (f'<div style="margin-bottom:6px">{chips}</div>' if chips else '')
             + (f'<div style="margin-bottom:6px">{kind_html}</div>' if kind_html else '')
-            + f'<div class="muted">출처: {esc(u["source"])}</div>',
+            + f'<div class="muted">출처: {esc(u["source"] or "패치노트 원문 미등록")}</div>',
             unsafe_allow_html=True)
 
 
@@ -46,17 +46,24 @@ def _labels(n):
     return report.period_labels(n)
 
 
+def _cal_labels():
+    return report.cal_period_labels()
+
+
 def _kpis(env):
     rep, n, d = env.rep, env.rep['window'], env.upd['date']
-    cur_l, prev_l = _labels(n)
+    cur_l, prev_l = _cal_labels()
     rs, ds = rep['rev_series'], rep['dau_series']
     dt = pd.Timestamp(d)
-    w_r = an.week_compare(rs, d, n)
-    w_d = an.week_compare(ds, d, n)
+    w_r = an.week_compare_cal(rs, d)
+    w_d = an.week_compare_cal(ds, d)
 
-    prev_start = (dt - pd.Timedelta(days=n)).strftime('%m/%d')
-    prev_end = (dt - pd.Timedelta(days=1)).strftime('%m/%d')
-    cur_end = (dt + pd.Timedelta(days=n - 1)).strftime('%m/%d')
+    # 달력 주 날짜 (데이터 여부와 무관하게 계산 가능)
+    ws = dt - pd.Timedelta(days=dt.dayofweek)
+    we = ws + pd.Timedelta(days=6)
+    ps = ws - pd.Timedelta(days=7)
+    pe = ws - pd.Timedelta(days=1)
+    pre_days = dt.dayofweek
 
     def _pv(v):
         if v is None: return '분석 불가'
@@ -80,11 +87,11 @@ def _kpis(env):
         f'<th style="{th.format("right")}">추정 매출 합계</th>'
         f'<th style="{th.format("right")}">일평균 DAU</th>'
         f'</tr></thead><tbody>'
-        + _row(f'{prev_l} <span style="font-weight:400;font-size:12px;color:var(--muted)">({prev_start}~{prev_end})</span>',
+        + _row(f'{prev_l} <span style="font-weight:400;font-size:12px;color:var(--muted)">({ps.strftime("%m/%d")}~{pe.strftime("%m/%d")})</span>',
                ui.fmt_krw(w_r['prev_sum'] if w_r else None), ui.fmt_dau(w_d['prev_mean'] if w_d else None), td)
-        + _row(f'{cur_l} <span style="font-weight:400;font-size:12px;color:var(--muted)">({dt.strftime("%m/%d")}~{cur_end})</span>',
+        + _row(f'{cur_l} <span style="font-weight:400;font-size:12px;color:var(--muted)">({ws.strftime("%m/%d")}~{we.strftime("%m/%d")}, D0={dt.strftime("%m/%d")}{"" if pre_days == 0 else f", 이 중 {pre_days}일은 업데이트 이전"})</span>',
                ui.fmt_krw(w_r['cur_sum'] if w_r else None), ui.fmt_dau(w_d['cur_mean'] if w_d else None), td)
-        + _row('전후 증감률',
+        + _row('주간 변화율',
                _pv(w_r['pct'] if w_r else None), _pv(w_d['pct'] if w_d else None), td_b)
         + '</tbody></table>'
     )
@@ -99,18 +106,17 @@ def _kpis(env):
         wd = '월화수목금토일'[x['prev_date'].dayofweek]
         st.caption(f'업데이트 당일(D0) 추정 매출 {ui.fmt_krw(x["cur"])} — {n}일 전 같은 요일({x["prev_date"]:%m/%d} {wd}) {ui.fmt_krw(x["prev"])} 대비 {fp(x["pct"])} (하루 단위 참고값)')
     if w_r and w_r.get('peak_pct') is not None:
-        k = w_r['cur_peak_k']
-        st.caption(f'{cur_l} 최고 일 추정 매출 {ui.fmt_krw(w_r["cur_peak"])} ({"D0" if k == 0 else f"D+{k}"}) — {prev_l} 최고 일 {ui.fmt_krw(w_r["prev_peak"])} 대비 {fp(w_r["peak_pct"])}')
-    st.caption(f'대표 성과 = 이전 {n}일(D-{n}∼D-1) 대비 이후 {n}일(D0∼D+{n - 1}, 업데이트 당일 포함) 비교입니다. '
-               f'추정 매출은 Sensor Tower USD 원본을 1 USD = 1,350원 환산 표시 (고정 환율, 표시 목적). 플랫폼·집계 범위는 미확인. 관찰된 변화이지 업데이트가 원인이라는 뜻이 아닙니다.')
+        st.caption(f'{cur_l} 최고 일 추정 매출 {ui.fmt_krw(w_r["cur_peak"])} — {prev_l} 최고 일 {ui.fmt_krw(w_r["prev_peak"])} 대비 {fp(w_r["peak_pct"])}')
+    st.caption(f'비교 기준: {prev_l}({ps.strftime("%m/%d")}–{pe.strftime("%m/%d")}) 대비 {cur_l}({ws.strftime("%m/%d")}–{we.strftime("%m/%d")}) · 월–일 기준. '
+               f'D0 이전 {pre_days}일이 업데이트 주에 포함됩니다. 추정 매출은 Sensor Tower USD → 1,350원 환산. 관찰이지 인과 아님.')
 
 
 def _findings(env):
     """주요 발견 — 3단계 문장형 요약: 전체 변화 / 시간 반응 / 국가별."""
     rep, n, d = env.rep, env.rep['window'], env.upd['date']
     rs, ds = rep['rev_series'], rep['dau_series']
-    w_r = an.week_compare(rs, d, n)
-    w_d = an.week_compare(ds, d, n)
+    w_r = an.week_compare_cal(rs, d)
+    w_d = an.week_compare_cal(ds, d)
 
     # ① 전체 변화
     def _dir(w):
@@ -136,39 +142,48 @@ def _findings(env):
         pct_parts.append(f'일평균 DAU {ui.fp_colored(w_d["pct"])}')
     pct_note_html = ' · '.join(pct_parts) if pct_parts else '수치 계산 불가'
 
-    # ② 시간에 따른 반응
-    d0_r = an.day_vs_prev(rs, d, 0, n)
-    d6_r = an.day_vs_prev(rs, d, n - 1, n)
-    d0_d = an.day_vs_prev(ds, d, 0, n)
-    d6_d = an.day_vs_prev(ds, d, n - 1, n)
-
-    def _pv(x):
-        return '분석 불가' if x is None or x['pct'] is None else ui.fp_colored(x['pct'])
-
-    def _temp_desc(d0, d6, label):
-        if d0 is None or d0['pct'] is None:
+    # ② 시간에 따른 반응 (D0~D+6 일자별 전주 동일 요일 대비)
+    def _trend_desc(ser, label):
+        vals = [(k, x['pct']) for k in range(n) for x in [an.day_vs_prev(ser, d, k, n)] if x and x['pct'] is not None]
+        if not vals:
             return None, None
-        d0v, d6v = d0['pct'], (d6['pct'] if (d6 and d6['pct'] is not None) else None)
-        up0 = '상승' if d0v > 0 else ('하락' if d0v < 0 else '변화 없음')
-        if d6v is not None:
-            up6 = '상승' if d6v > 0 else ('하락' if d6v < 0 else '변화 없음')
-            if up0 == up6:
-                desc = f'{label}: D0에도, D+{n - 1}에도 전주 동일 요일 대비 {up0}'
-            else:
-                desc = f'{label}: D0에는 전주 동일 요일 대비 {up0}, D+{n - 1}에는 {up6}'
+        pos = [k for k, v in vals if v > 0]
+        neg = [k for k, v in vals if v < 0]
+        kmax = vals[-1][0]
+        if len(pos) == len(vals):
+            pattern = f'D0~D+{kmax} 전주 동일 요일 대비 모두 플러스(+)'
+        elif len(neg) == len(vals):
+            pattern = f'D0~D+{kmax} 전주 동일 요일 대비 모두 마이너스(-)'
+        elif vals[0][1] > 0:
+            first_neg = next(k for k, v in vals if v < 0)
+            pos_range = 'D0만' if first_neg == 1 else f'D0~D+{first_neg - 1}'
+            pattern = f'{pos_range} 전주 동일 요일 대비 플러스(+), D+{first_neg}부터 마이너스(-) 전환'
+        elif vals[0][1] < 0:
+            first_pos = next(k for k, v in vals if v > 0)
+            neg_range = 'D0만' if first_pos == 1 else f'D0~D+{first_pos - 1}'
+            pattern = f'{neg_range} 전주 동일 요일 대비 마이너스(-), D+{first_pos}부터 플러스(+) 전환'
         else:
-            desc = f'{label}: D0에 전주 동일 요일 대비 {up0} (D+{n - 1} 수치 없음)'
-        return desc, f'D0 {ui.fp_colored(d0v)} → D+{n - 1} {_pv(d6)}'
+            pattern = f'D0~D+{kmax}: 플러스(+) {len(pos)}일, 마이너스(-) {len(neg)}일 (전주 동일 요일 대비)'
+        basis = ' / '.join(f'{"D0" if k == 0 else f"D+{k}"} {ui.fp_colored(v)}' for k, v in vals)
+        return f'{label}: {pattern}', basis
 
-    rev_desc, rev_basis = _temp_desc(d0_r, d6_r, '매출')
-    dau_desc, dau_basis = _temp_desc(d0_d, d6_d, 'DAU')
+    rev_desc, rev_basis = _trend_desc(rs, '매출')
+    dau_desc, dau_basis = _trend_desc(ds, 'DAU')
 
     # ③ 국가별 반응
     pool = [c for c in rep['countries'] if rep['scope'] != 'common' or not c['tag']]
 
     def _ctry(key_name):
-        rows = [(c['name'], c[key_name]['delta']['change_pct']) for c in pool
-                if c[key_name] and c[key_name]['ok'] and c[key_name].get('delta')]
+        # 달력 주(월~일) 기준 — 주 KPI와 동일한 계산 방식
+        df_col = env.ctx.rev if key_name == 'rev' else env.ctx.dau
+        rows = []
+        for c in pool:
+            if not (c[key_name] and c[key_name]['ok']):
+                continue
+            if c['name'] in df_col.columns:
+                w = an.week_compare_cal(df_col[c['name']], d)
+                if w:
+                    rows.append((c['name'], w['pct']))
         if not rows:
             return None, None, None, None
         rows.sort(key=lambda x: -x[1])
@@ -205,18 +220,18 @@ def _findings(env):
 
     sub = f'<span style="font-weight:400">'
     with st.container(key='card_obs'):
-        st.markdown('<h4><span class="tag-obs">[관찰]</span> 주요 발견 — 계산된 수치</h4>', unsafe_allow_html=True)
+        st.markdown('<div class="blk"><h4><span class="tag-obs">[관찰]</span> 주요 발견 — 계산된 수치</h4></div>', unsafe_allow_html=True)
 
         st.markdown(
             f'<div style="font-size:12px;font-weight:600;color:var(--muted);margin:6px 0 2px 0">① 전체 변화</div>'
             f'<div style="font-size:16px;font-weight:700;color:var(--navy);margin:0 0 2px 0">{esc(headline)}</div>'
-            f'<div class="muted" style="margin-bottom:10px">{pct_note_html} — {esc(rep["rev_scope_label"])} / {esc(rep["dau_scope_label"])} · 이전 {n}일 vs 이후 {n}일 기준</div>',
+            f'<div class="muted" style="margin-bottom:10px">{pct_note_html} — {esc(rep["rev_scope_label"])} / {esc(rep["dau_scope_label"])} · 달력 주(월~일) 기준</div>',
             unsafe_allow_html=True)
 
         if rev_desc or dau_desc:
             st.markdown(
                 f'<div style="font-size:12px;font-weight:600;color:var(--muted);margin:4px 0 4px 0">'
-                f'② 시간에 따른 반응 {sub}(전주 동일 요일 대비 하루 단위 참고값 — 업데이트 효과의 지속성을 단정하지 않습니다)</span></div>',
+                f'② 시간에 따른 반응 {sub}(전주 동일 요일 대비 일자별 — 업데이트 효과의 지속성을 단정하지 않습니다)</span></div>',
                 unsafe_allow_html=True)
             for desc, basis in [(rev_desc, rev_basis), (dau_desc, dau_basis)]:
                 if desc:
@@ -228,7 +243,7 @@ def _findings(env):
         if ctry_hl:
             st.markdown(
                 f'<div style="font-size:12px;font-weight:600;color:var(--muted);margin:4px 0 4px 0">'
-                f'③ 국가별 반응 {sub}(선택된 집계 범위 기준)</span></div>'
+                f'③ 국가별 반응 {sub}(달력 주 기준 · 선택된 집계 범위)</span></div>'
                 f'<div style="font-size:13.5px;color:var(--navy);margin-bottom:1px">{esc(ctry_hl)}</div>'
                 f'<div class="muted" style="margin-bottom:4px">근거: {esc(ctry_basis)}</div>',
                 unsafe_allow_html=True)
@@ -236,31 +251,36 @@ def _findings(env):
                 st.caption(' | '.join(detail_parts))
 
 
-# ── 1. 이후 7일 vs 이전 7일 일별 추이 ──────────────────────────────────────────────────────────
+# ── 1. 달력 주(월~일) 기준 일별 추이 ────────────────────────────────────────────
 def _response(env):
-    rep, n = env.rep, env.rep['window']
-    cur_l, prev_l = _labels(n)
-    ui.section(1, f'{cur_l} vs {prev_l} 일별 추이', f'이전 {n}일(D-{n}~D-1)과 이후 {n}일(D0~D+{n - 1})을 같은 순서로 겹쳐 보여줍니다 · 실제 일별 값, 관측된 날짜만 표시 · D+{n} 이후는 포함하지 않음')
+    rep = env.rep
+    d = pd.Timestamp(env.upd['date'])
+    ws = d - pd.Timedelta(days=d.dayofweek)
+    ps = ws - pd.Timedelta(days=7)
+    ui.section(1, '업데이트 전후 일별 반응',
+               f'전주(월~일) {ps:%m/%d}–{ps + pd.Timedelta(days=6):%m/%d} 대비 업데이트 주(월~일) '
+               f'{ws:%m/%d}–{ws + pd.Timedelta(days=6):%m/%d} · 업데이트가 발생한 요일에 D0 표시')
     c1, c2 = st.columns(2)
     for col, key, label, color in ((c1, 'rev', '추정 매출', charts.BLUE), (c2, 'dau', 'DAU', charts.GREEN)):
         with col.container(key=f'card_resp_{key}'):
-            ui.card_title(f'일별 {label}', rep[f'{key}_scope_label'])
+            ui.card_title(f'일별 {label}', f'전주 대비 업데이트 주 일별 추이 · {rep[f"{key}_scope_label"]}')
             ser = rep[f'{key}_series']
-            if an.day_vs_prev(ser, env.upd['date'], 0, n) is None:
-                st.info('분석 불가 — 비교 구간 자료가 없습니다.')
-                continue
             disp_ser = ser * ui.KRW_RATE / 1e8 if key == 'rev' else ser
-            ui.show(charts.fig_week_overlay(disp_ser, env.upd['date'], n, color, name=label, zero=(key == 'rev'), unit='억원' if key == 'rev' else '명'))
+            fig = charts.fig_cal_week_overlay(disp_ser, env.upd['date'], color, name=label,
+                                              zero=(key == 'rev'), unit='억원' if key == 'rev' else '명')
+            if fig is None:
+                st.info('분석 불가 — 전주(월~일) 7일 데이터가 없습니다.')
+            else:
+                ui.show(fig)
     st.caption('DAU 차트는 변화가 보이도록 세로축이 0에서 시작하지 않습니다 (폭이 작으면 과장돼 보일 수 있어 숫자를 함께 확인하세요).')
     for f in rep['flags']:
         if f['kind'] == '업데이트 직전':
             st.caption('참고: ' + f['text'])
 
-
 # ── 2. 국가별 ──────────────────────────────────────────────
 def _comparison(env):
     rep, n = env.rep, env.rep['window']
-    cur_l, prev_l = _labels(n)
+    cur_l, prev_l = _cal_labels()
     ui.section(2, '국가별 비교', f'국가별 {cur_l} vs {prev_l} — 증감률만으로 판단하지 말고 실제 규모(값·증감액)와 함께 보세요')
     metric = st.radio('표시 지표', ['추정 매출', 'DAU'], horizontal=True, key='cmp_metric')
     key = 'rev' if metric == '추정 매출' else 'dau'
@@ -275,8 +295,7 @@ def _comparison(env):
         fd = ui.fmt_krw_delta if key == 'rev' else (lambda v: '분석 불가' if v is None else f'{v:+,.0f}명')
         return {'국가': label or r['name'] + ('' if r['group'] != '미포함' else ' *'),
                 f'{prev_l} {unit}': fv(r['prev']), f'{cur_l} {unit}': fv(r['cur']),
-                '증감액': fd(r['diff']), '증감률': fp(r['pct']) if r['pct'] is not None else '분석 불가',
-                'D0': fv(r['d0']), 'D0 증감 (참고)': fp(r['d0_pct']) if r['d0_pct'] is not None else '분석 불가'}
+                '증감액': fd(r['diff']), '증감률': fp(r['pct']) if r['pct'] is not None else '분석 불가'}
 
     rows = [line(total, '합계 (공통 {}개국)'.format(len(env.ctx.common)) if rep['scope'] == 'common' else '합계 (파일 전체)')] + [line(r) for r in body]
     c1, c2 = st.columns([0.8, 1.55])
@@ -298,9 +317,8 @@ def _comparison(env):
             st.caption('분석 불가: ' + ', '.join(skipped))
         st.caption('소규모 국가는 일 규모가 작아 증감률이 크게 나올 수 있습니다. 여러 국가가 함께 움직여도 업데이트의 인과적 효과가 입증되는 것은 아닙니다.')
     with c2.container(key='card_country_tbl'):
-        ui.card_title(f'국가별 {metric} 실제 값 ({"원화 환산" if key == "rev" else "원본 단위"}, 규모순)', rep[f'{key}_scope_label'] + ' 기준 합계 행과 포함 국가 행의 합이 일치합니다')
+        ui.card_title(f'국가별 {metric} 실제 값 ({"원화 환산" if key == "rev" else "원본 단위"}, 규모순)', rep[f'{key}_scope_label'] + ' 기준 · 전주 7일 데이터가 없는 국가는 분석 불가')
         ui.table(pd.DataFrame(rows))
-        st.caption('D0 증감 (참고)는 업데이트 당일 값을 7일 전 같은 요일과 비교한 하루 단위 참고값입니다.')
         if any(r['group'] == '미포함' for r in body):
             st.caption('* 합계에 포함되지 않은 국가 — ' + ('매출 파일에만 있는 국가' if key == 'rev' else 'DAU 파일에만 있는 국가') +
                        '입니다 (공통 국가 합산은 매출·DAU 파일 모두에 있는 국가만 더합니다).')
@@ -321,32 +339,34 @@ def _daily_table(env):
                 day = pd.Timestamp(d) + pd.Timedelta(days=k)
                 rows.append({'날짜': f'{day:%m/%d} ({"월화수목금토일"[day.dayofweek]}) {"D0" if k == 0 else f"D+{k}"}',
                              f'{n}일 전 같은 요일': fv(x['prev'] if x else None), '업데이트 후': fv(x['cur'] if x else None),
-                             '증감': fp(x['pct']) if x and x['pct'] is not None else '분析 불가'})
+                             '증감': fp(x['pct']) if x and x['pct'] is not None else '분석 불가'})
             ui.table(pd.DataFrame(rows))
-    st.caption(f'대표 성과는 위의 "이전 {n}일 vs 이후 {n}일" 합계 비교입니다. 이 표는 같은 요일끼리 하루씩 맞춘 참고값이라, 연휴·후속 이벤트가 겹치면 증감의 원인을 구분할 수 없습니다.')
+    st.caption('대표 성과는 위의 달력 주(전주 대비 업데이트 주) 비교입니다. 이 표는 같은 요일끼리 하루씩 맞춘 참고값이라, 연휴·후속 이벤트가 겹치면 증감의 원인을 구분할 수 없습니다.')
 
 
 # ── 4. 공지·관찰·가설·요인·한계 ──────────────────────────────
 def _items_html(upd):
+    items_detail = upd.get('items_detail') or {}
+    items = upd.get('items') or {}
+    # Fallback: synthesize items_detail from items when items_detail is empty
+    if not items_detail and items:
+        items_detail = {cat: [{'text': t, 'kind': ''} for t in its] for cat, its in items.items() if its}
     out = []
-    for cat in env_cats(upd):
-        its = upd['items_detail'].get(cat, [])
+    for cat, its in items_detail.items():
         if not its:
             continue
-        lis = ''.join(f'<li>{esc(x["text"])}' + (f' <span class="badge kind">{esc(x["kind"])}</span>' if x['kind'] else '') + '</li>' for x in its)
+        lis = ''.join(f'<li>{esc(x["text"])}' + (f' <span class="badge kind">{esc(x["kind"])}</span>' if x.get('kind') else '') + '</li>' for x in its)
         out.append(f'<div class="meta" style="margin-top:6px"><b>{esc(cat)}</b></div><ul>{lis}</ul>')
     return ''.join(out)
 
 
 def env_cats(upd):
-    return list(upd['items_detail'].keys())
+    return list(upd['items_detail'].keys()) if upd.get('items_detail') else list(upd.get('items', {}).keys())
 
 
-def _narrative(env):
-    rep, u = env.rep, env.upd
-    ui.section(4, '공지와 관찰된 반응의 해석', '공지에서 확인된 사실 · 사업적 해석 가설 · 함께 고려할 요인 · 한계를 구분합니다 (관찰된 수치는 위의 "주요 발견"에 있습니다)')
-
-    # 행 1: [가설] 전체 너비
+def _hypothesis(env):
+    """사업 해석 제안 [가설] — 주요 발견 이전에 표시."""
+    u = env.upd
     with st.container(key='card_hyp'):
         hyp = [ui.norm_hyp(h) for h in u['hypotheses']]
         def _hyp_li(h):
@@ -363,18 +383,23 @@ def _narrative(env):
             with st.expander(f'나머지 가설 {len(extra_hyp)}개 펼쳐 보기'):
                 st.markdown('<ul>' + ''.join(_hyp_li(h) for h in extra_hyp) + '</ul>', unsafe_allow_html=True)
 
-    # 행 2: [참고] 공지 기반 업데이트 구성 전체 너비
+
+def _narrative(env):
+    rep, u = env.rep, env.upd
+    ui.section(4, '공지와 관찰된 반응의 해석', '공지에서 확인된 사실 · 함께 고려할 요인 · 한계를 구분합니다 (가설은 위, 관찰된 수치는 "주요 발견"에 있습니다)')
+
+    # [참고] 공지 기반 업데이트 구성 전체 너비
     with st.container(key='card_notice'):
-        n_items = sum(len(v) for v in u['items_detail'].values())
+        n_items = sum(len(v) for v in u['items_detail'].values()) if u.get('items_detail') else sum(len(v) for v in u.get('items', {}).values())
         st.markdown('<div class="blk"><h4><span class="tag-fact">[참고]</span> 공지 기반 업데이트 구성</h4>'
-                    f'<div class="meta">출처: {esc(u["source"])}</div></div>', unsafe_allow_html=True)
+                    f'<div class="meta">출처: {esc(u["source"] or "패치노트 원문 미등록")}</div></div>', unsafe_allow_html=True)
         with st.expander(f'공지 항목 {n_items}개 펼쳐 보기', expanded=False):
             st.markdown(_items_html(u), unsafe_allow_html=True)
         for f in rep['notice_facts'][1:]:
             if f.startswith('공지 요약에 신규 BM'):
                 st.caption(f)
 
-    # 행 3: 2열 — [참고] 함께 고려할 요인 / [한계]
+    # 2열 — [참고] 함께 고려할 요인 / [한계]
     d_col, e_col = st.columns(2)
     with d_col.container(key='card_conf'):
         flags = ''.join(f'<li><b>{esc(f["kind"])}</b> — {esc(f["text"])}</li>' for f in rep['flags'])
@@ -411,15 +436,16 @@ def _more(env):
             else:
                 st.write('점검에서 발견된 문제가 없습니다.')
             ctx = env.ctx
-            st.caption(f'자료 기간 {ctx.rev.index.min():%Y-%m-%d} ∼ {ctx.rev.index.max():%Y-%m-%d} (매출) / {ctx.dau.index.min():%Y-%m-%d} ∼ {ctx.dau.index.max():%Y-%m-%d} (DAU).')
+            st.caption(f'자료 기간 {ctx.rev.index.min():%Y-%m-%d} ~ {ctx.rev.index.max():%Y-%m-%d} (매출) / {ctx.dau.index.min():%Y-%m-%d} ~ {ctx.dau.index.max():%Y-%m-%d} (DAU).')
 
 
 def _glossary(env):
     n = env.rep['window']
     with st.expander('지표 정의 (이 화면의 용어와 계산 기준)'):
         st.markdown(
-            f'- **D0**: 업데이트 당일입니다. **이전 {n}일**은 D-{n}∼D-1, **이후 {n}일**은 D0∼D+{n - 1}(당일 포함)이며 달력 주가 아닙니다. 두 구간의 요일 구성이 같습니다.\n'
-            f'- **대표 성과**: 이후 {n}일 합계(DAU는 일평균)와 이전 {n}일을 비교한 증감액·증감률입니다. 합계로 비교해도 일평균으로 비교해도 증감률은 같습니다.\n'
+            f'- **D0**: 업데이트 당일입니다. **이전 {n}일**은 D-{n}~D-1, **이후 {n}일**은 D0~D+{n - 1}(당일 포함)이며 달력 주가 아닙니다. 아래 일별 추이 차트에서 사용합니다.\n'
+            f'- **달력 주(월~일) 기준**: 핵심 KPI·주요 발견·국가별 비교의 "주간 변화율"은 D0이 포함된 월~일(업데이트 주) vs 그 직전 월~일(전주)을 비교합니다. 업데이트 주에 D0 이전 날이 포함될 수 있습니다.\n'
+            f'- **추정 매출 주간 합계**: 달력 주 7일 합계입니다. **일평균 DAU**: 달력 주 7일 평균입니다. 7일 데이터가 없으면 "계산 불가"로 표시합니다.\n'
             f'- **{n}일 전 같은 요일 비교**: 하루 단위 참고값입니다. 업데이트 효과를 직접 측정하는 지표가 아닙니다.\n'
             f'- **DAU**: {report.DAU_NOTE}\n'
             '- **추정 매출**: Sensor Tower 추정치이며 원본 CSV의 단위 그대로입니다 (통화·집계 범위 미확인).\n'
@@ -431,6 +457,7 @@ def render(env):
     st.write('')
     _kpis(env)
     _findings(env)
+    _hypothesis(env)
     _glossary(env)
     _response(env)
     _comparison(env)

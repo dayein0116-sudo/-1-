@@ -475,3 +475,26 @@ def day_vs_prev(s, date, k=0, n=7):
         return None
     return {'cur': float(x), 'prev': float(y), 'pct': (float(x) / float(y) - 1) * 100 if y else None,
             'cur_date': d + pd.Timedelta(days=k), 'prev_date': d + pd.Timedelta(days=k - n)}
+
+
+def week_compare_cal(s, date):
+    """달력 주(월~일) 기준: 업데이트 주 vs 전주.
+    업데이트 주 = D0이 포함된 월~일, 전주 = 그 직전 월~일.
+    7일 모두 non-NaN 데이터가 있어야 계산 가능. 없으면 None.
+    pre_days = 업데이트 주 중 D0 이전 날 수 (월=0, ..., 일=6)."""
+    d = pd.Timestamp(date)
+    ws = d - pd.Timedelta(days=d.dayofweek)   # 업데이트 주 월요일
+    we = ws + pd.Timedelta(days=6)             # 업데이트 주 일요일
+    ps = ws - pd.Timedelta(days=7)             # 전주 월요일
+    pe = ws - pd.Timedelta(days=1)             # 전주 일요일
+    cur = s[(s.index >= ws) & (s.index <= we)].dropna()
+    prev = s[(s.index >= ps) & (s.index <= pe)].dropna()
+    if len(cur) != 7 or len(prev) != 7 or prev.sum() == 0:
+        return None
+    return {'cur_sum': float(cur.sum()), 'prev_sum': float(prev.sum()),
+            'cur_mean': float(cur.mean()), 'prev_mean': float(prev.mean()),
+            'pct': (float(cur.sum()) / float(prev.sum()) - 1) * 100,
+            'week_start': ws, 'week_end': we, 'prev_start': ps, 'prev_end': pe,
+            'pre_days': d.dayofweek,
+            'cur_peak': float(cur.max()), 'prev_peak': float(prev.max()),
+            'peak_pct': (float(cur.max()) / float(prev.max()) - 1) * 100 if float(prev.max()) > 0 else None}

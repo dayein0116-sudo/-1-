@@ -19,7 +19,7 @@ BASE = Path(__file__).parent
 
 PAGES = ['업데이트 진단', '업데이트 비교', '국가별 반응', '업데이트 구성', '전체 개요']
 SCOPE_OPTIONS = ['common', 'file']
-WINDOW = 7  # 대표 성과 비교 기간: 모든 화면이 같은 이전 7일 vs 이후 7일(D0~D+6)을 씁니다
+WINDOW = 7  # 비교 기간: KPI/국가는 달력 주(월~일) 기준, 일별 차트는 D0 기준 이전/이후 7일
 
 # ── 등록된 프로젝트 불러오기 ────────────────────────────────
 projects, failed = registry.discover_projects(BASE / 'projects')
@@ -37,7 +37,7 @@ with st.sidebar:
     page = st.radio('메뉴', PAGES, key='page', label_visibility='collapsed')
     st.divider()
     window = WINDOW
-    st.markdown(f'<div class="side-note"><b>비교 기준</b><br>이전 {WINDOW}일(D-{WINDOW}~D-1) vs 이후 {WINDOW}일(D0~D+{WINDOW - 1}, 업데이트 당일 포함)로 고정합니다.</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="side-note"><b>비교 기준</b><br>핵심 KPI·주요 발견·국가별 비교: 달력 주(월~일) 기준 — 업데이트 주 vs 전주. 일별 추이 차트: 전주(월~일) vs 업데이트 주(월~일), 업데이트일 D0 표시.</div>', unsafe_allow_html=True)
     st.markdown('<div class="side-note">Sensor Tower 추정치 기반입니다. 관찰된 변화이며 업데이트의 인과적 효과나 콘텐츠별 매출 기여율이 아닙니다.</div>', unsafe_allow_html=True)
     if failed:
         with st.expander(f'읽지 못한 프로젝트 {len(failed)}개'):
@@ -63,9 +63,9 @@ dates = [u['date'] for u in project.updates]
 st.session_state.setdefault('sel_upd', dates[-1])
 if st.session_state['sel_upd'] not in dates:
     st.session_state['sel_upd'] = dates[-1]
-st.session_state.setdefault('sel_scope', 'common')
+st.session_state.setdefault('sel_scope', 'file')
 if st.session_state['sel_scope'] not in SCOPE_OPTIONS:
-    st.session_state['sel_scope'] = 'common'
+    st.session_state['sel_scope'] = 'file'
 by_date = {u['date']: u for u in project.updates}
 with top2:
     st.selectbox('업데이트 선택', dates, index=dates.index(st.session_state['sel_upd']), key='upd_w',

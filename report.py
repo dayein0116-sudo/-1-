@@ -19,8 +19,13 @@ DAU_NOTE = ('DAU 합계는 국가별 DAU 추정치를 같은 날짜끼리 더한
 
 
 def period_labels(n=7):
-    """대표 성과 비교의 두 구간 이름. 이전 N일 = D-N~D-1, 이후 N일 = D0~D+N-1 (업데이트 당일 포함)."""
+    """D0 기반 비교의 두 구간 이름 (이후 N일 vs 이전 N일). 일별 추이 차트·테이블에서 사용."""
     return f'이후 {n}일', f'이전 {n}일'
+
+
+def cal_period_labels():
+    """달력 주(월~일) 기준 비교의 두 구간 이름. KPI·국가 비교·업데이트 비교에서 사용."""
+    return '업데이트 주', '전주'
 
 
 @dataclass
@@ -165,10 +170,10 @@ def _pc(v):
 def data_facts(rep):
     """[관찰] 계산된 수치를 문장으로 옮긴 것 — 해석이나 원인 판단을 넣지 않습니다."""
     n, d, f = rep['window'], rep['update']['date'], []
-    cur, prev = period_labels(n)
+    cur, prev = cal_period_labels()
     for key, label in (('rev', '추정 매출'), ('dau', 'DAU')):
         ser = rep[f'{key}_series']
-        d0, wk = an.day_vs_prev(ser, d, 0, n), an.week_compare(ser, d, n)
+        d0, wk = an.day_vs_prev(ser, d, 0, n), an.week_compare_cal(ser, d)
         if d0 is None and wk is None:
             f.append(f'{label}: 분석 불가 — {rep[key].get("reason") or "비교 구간 자료 부족"}')
             continue
@@ -181,11 +186,7 @@ def data_facts(rep):
             f.append(f'{label}: {cur} 비교는 분석 불가 — 자료 끝({ser.dropna().index.max():%m/%d})을 넘거나 비어 있습니다.')
         if d0:
             f.append(f'{label}: 업데이트 당일(D0)은 {n}일 전 같은 요일 대비 {_pc(d0["pct"])} ({d0["prev"]:,.0f} → {d0["cur"]:,.0f}) — 하루 단위 참고값입니다.')
-        last = an.day_vs_prev(ser, d, n - 1, n)
-        if last and wk:
-            f.append(f'{label}: 마지막 날(D+{n - 1})은 {n}일 전 같은 요일 대비 {_pc(last["pct"])}입니다.')
     for key, label in (('rev', '추정 매출'), ('dau', 'DAU')):
-        # 집계 범위와 같은 국가만 센다 (공통 범위에서는 매출만/DAU만 있는 국가 제외)
         pool = [c for c in rep['countries'] if rep['scope'] != 'common' or not c['tag']]
         rows = [(c['name'], c[key]['delta']['change_pct']) for c in pool if c[key] and c[key]['ok'] and c[key].get('delta')]
         if rows:
@@ -218,16 +219,16 @@ def limits_for(rep, upd, ctx):
 
 
 def country_week_table(ctx, rep, key):
-    """국가별 이전 N일 / 이후 N일 값, 증감액, 증감률 (+합계 행). key='rev'면 N일 합계, 'dau'면 N일 일평균.
-    합계 행은 KPI와 같은 집계 범위의 시리즈에서 계산하므로 '합계 포함' 국가 행의 합과 일치해야 합니다 (테스트로 확인).
+    """국가별 달력 주(월~일) 기준 업데이트 주 / 전주 값, 증감액, 증감률 (+합계 행).
+    key='rev'면 주간 합계, 'dau'면 주간 일평균.
     반환: [{'name','group','prev','cur','diff','pct','d0','d0_pct'}] — group: '합계' / '포함' / '미포함'. 계산 불가 칸은 None."""
     n, d = rep['window'], rep['update']['date']
     df = ctx.rev if key == 'rev' else ctx.dau
     inc_cols = ctx.scope_columns(rep['scope'])[0 if key == 'rev' else 1]
-    mult = 1.0 if key == 'rev' else 1.0 / n
+    mult = 1.0 if key == 'rev' else 1.0 / 7  # DAU: 주간 일평균
 
     def row(name, ser, group):
-        w, x = an.week_compare(ser, d, n), an.day_vs_prev(ser, d, 0, n)
+        w, x = an.week_compare_cal(ser, d), an.day_vs_prev(ser, d, 0, n)
         if not w:
             return {'name': name, 'group': group, 'prev': None, 'cur': None, 'diff': None, 'pct': None,
                     'd0': x['cur'] if x else None, 'd0_pct': x['pct'] if x else None}

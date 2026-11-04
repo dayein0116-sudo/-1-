@@ -206,27 +206,104 @@ WD = '월화수목금토일'
 def fig_week_overlay(series, date, n, color=BLUE, name='값', zero=True, unit=''):
     """이후 n일(D0~D+n-1)과 이전 n일(D-n~D-1)을 같은 순서로 겹쳐 그림. 관측된 값만 사용, 보간 없음."""
     d = pd.Timestamp(date)
-    xs, cur, prev, hov = [], [], [], []
+    prev_start, prev_end = d - pd.Timedelta(days=n), d - pd.Timedelta(days=1)
+    cur_end = d + pd.Timedelta(days=n - 1)
+    xs, cur, prev, hov_prev, hov_cur = [], [], [], [], []
     for k in range(n):
         x, y = series.get(d + pd.Timedelta(days=k)), series.get(d + pd.Timedelta(days=k - n))
-        xs.append(f'D{k} ({WD[(d + pd.Timedelta(days=k)).dayofweek]})' if k else f'D0 ({WD[d.dayofweek]})')
+        xs.append(f'D0 ({WD[d.dayofweek]})' if k == 0 else f'D+{k} ({WD[(d + pd.Timedelta(days=k)).dayofweek]})')
         cur.append(None if x is None or pd.isna(x) else float(x))
         prev.append(None if y is None or pd.isna(y) else float(y))
-        hov.append(f'{(d + pd.Timedelta(days=k)):%m/%d} vs {(d + pd.Timedelta(days=k - n)):%m/%d}')
+        hov_prev.append(f'{(d + pd.Timedelta(days=k-n)):%m/%d}')
+        hov_cur.append(f'{(d + pd.Timedelta(days=k)):%m/%d}')
     hover_fmt = ':.2f' if unit == '억원' else ':,.0f'
     tick_fmt = '.1f' if unit == '억원' else ',.0f'
+    # D0 position emphasis: larger diamond marker at k=0
+    cur_sizes = [12] + [7] * (n - 1)
+    cur_symbols = ['diamond'] + ['circle'] * (n - 1)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=xs, y=prev, name=f'이전 {n}일', mode='lines+markers', line=dict(color=GRAY, width=2, dash='dash'),
-                             marker=dict(size=6), customdata=hov, connectgaps=False, hovertemplate=f'%{{customdata}}<br>업데이트 이전 7일: %{{y{hover_fmt}}}{unit}<extra></extra>'))
-    fig.add_trace(go.Scatter(x=xs, y=cur, name=f'이후 {n}일', mode='lines+markers', line=dict(color=color, width=2.8),
-                             marker=dict(size=7), customdata=hov, connectgaps=False, hovertemplate=f'%{{customdata}}<br>업데이트 이후 7일: %{{y{hover_fmt}}}{unit}<extra></extra>'))
+    fig.add_trace(go.Scatter(x=xs, y=prev, name=f'이전 기간 ({prev_start:%m/%d}–{prev_end:%m/%d})',
+                             mode='lines+markers', line=dict(color=GRAY, width=2, dash='dash'),
+                             marker=dict(size=6), customdata=hov_prev, connectgaps=False,
+                             hovertemplate=f'이전 %{{customdata}}: %{{y{hover_fmt}}}{unit}<extra></extra>'))
+    fig.add_trace(go.Scatter(x=xs, y=cur, name=f'이후 기간 ({d:%m/%d}–{cur_end:%m/%d})',
+                             mode='lines+markers', line=dict(color=color, width=2.8),
+                             marker=dict(size=cur_sizes, symbol=cur_symbols), customdata=hov_cur, connectgaps=False,
+                             hovertemplate=f'이후 %{{customdata}}: %{{y{hover_fmt}}}{unit}<extra></extra>'))
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(gridcolor='#e6eaf4', zeroline=False, tickformat=tick_fmt, ticksuffix=unit, rangemode='tozero' if zero else 'normal')
-    fig.update_layout(legend=dict(orientation='h', y=1.12, x=0))
+    fig.update_layout(legend=dict(orientation='h', y=1.12, x=0), hovermode='x unified')
     fig = _base_layout(fig, 330)
     fig.update_layout(margin=dict(l=8, r=8, t=30, b=8))
     return fig
 
+
+def fig_cal_week_overlay(series, date, color=BLUE, name='값', zero=True, unit=''):
+    """달력 주(월~일) 기준 업데이트 주 vs 전주 일별 비교. 전주 7일 미완성이면 None 반환."""
+    d = pd.Timestamp(date)
+    ws = d - pd.Timedelta(days=d.dayofweek)
+    ps = ws - pd.Timedelta(days=7)
+    d0 = d.dayofweek
+
+    xs, cur_vals, prev_vals, hov_cur, hov_prev = [], [], [], [], []
+    for k in range(7):
+        cd, pd_ = ws + pd.Timedelta(days=k), ps + pd.Timedelta(days=k)
+        cx, px = series.get(cd), series.get(pd_)
+        xs.append(WD[k] if k != d0 else f'{WD[k]} (D0)')
+        cur_vals.append(None if cx is None or pd.isna(cx) else float(cx))
+        prev_vals.append(None if px is None or pd.isna(px) else float(px))
+        hov_cur.append(f'{cd:%m/%d}')
+        hov_prev.append(f'{pd_:%m/%d}')
+
+    if sum(1 for v in prev_vals if v is not None) != 7:
+        return None
+
+    hover_fmt = ':.2f' if unit == '억원' else ':,.0f'
+    tick_fmt = '.1f' if unit == '억원' else ',.0f'
+    ws_range = f'{ws:%m/%d}–{ws + pd.Timedelta(days=6):%m/%d}'
+    ps_range = f'{ps:%m/%d}–{ps + pd.Timedelta(days=6):%m/%d}'
+    d_label = f'{d:%Y-%m-%d} ({WD[d0]})'
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=xs, y=prev_vals, name=f'전주 ({ps_range})',
+        mode='lines+markers', line=dict(color=GRAY, width=2),
+        marker=dict(size=6), customdata=hov_prev, connectgaps=False,
+        hovertemplate=f'전주 %{{customdata}}: %{{y{hover_fmt}}}{unit}<extra></extra>'))
+    fig.add_trace(go.Scatter(
+        x=xs, y=cur_vals, name=f'업데이트 주 ({ws_range})',
+        mode='lines+markers', line=dict(color=color, width=2.8),
+        marker=dict(size=7), customdata=hov_cur, connectgaps=False,
+        hovertemplate=f'업데이트 주 %{{customdata}}: %{{y{hover_fmt}}}{unit}<extra></extra>'))
+    # 업데이트 날짜 — D0 데이터 포인트에 화살표+박스 주석
+    d0_y = cur_vals[d0]
+    if d0_y is not None:
+        # D0가 오른쪽 절반(목~일)이면 라벨을 왼쪽에 배치하여 클리핑 방지
+        x_anchor = 'right' if d0 >= 3 else 'left'
+        ax_offset = -8 if d0 >= 3 else 8
+        fig.add_annotation(
+            x=xs[d0], y=d0_y,
+            ax=ax_offset, ay=-36, axref='pixel', ayref='pixel',
+            text=f'{d:%m/%d} ({WD[d0]}) 업데이트',
+            showarrow=True, arrowhead=2, arrowsize=0.9, arrowwidth=1.5,
+            arrowcolor=PURPLE,
+            bgcolor='rgba(107,79,216,0.10)', bordercolor=PURPLE,
+            borderwidth=1, borderpad=3,
+            font=dict(size=9, color=PURPLE),
+            xanchor=x_anchor, yanchor='bottom'
+        )
+    else:
+        # D0 값 없을 때(미래 날짜): 범례 아래 텍스트만 표시
+        fig.add_annotation(x=xs[d0], y=1.02, yref='paper', yanchor='bottom',
+                           showarrow=False, text=f'{d:%m/%d} ({WD[d0]}) 업데이트',
+                           font=dict(size=9, color=PURPLE))
+    fig.update_xaxes(type='category', showgrid=False)
+    fig.update_yaxes(gridcolor='#e6eaf4', zeroline=False, tickformat=tick_fmt, ticksuffix=unit,
+                     rangemode='tozero' if zero else 'normal')
+    fig.update_layout(legend=dict(orientation='h', y=1.12, x=0), hovermode='x unified')
+    fig = _base_layout(fig, 330)
+    fig.update_layout(margin=dict(l=8, r=8, t=30, b=8))
+    return fig
 
 def fig_group_bars(labels, prev, cur, prev_name, cur_name, color=BLUE, height=300, unit=''):
     """업데이트별 (직전 vs 이후) 값을 나란히 막대로 표시."""
@@ -239,5 +316,5 @@ def fig_group_bars(labels, prev, cur, prev_name, cur_name, color=BLUE, height=30
                          text=[f'{v:{fmt}}{unit}' if v is not None else '' for v in cur], textposition='outside'))
     fig.update_layout(barmode='group', legend=dict(orientation='h', y=1.14, x=0))
     fig.update_yaxes(gridcolor='#e6eaf4', zeroline=False, tickformat=tick_fmt, ticksuffix=unit)
-    fig.update_xaxes(showgrid=False)
+    fig.update_xaxes(type='category', showgrid=False)
     return _base_layout(fig, height)

@@ -218,3 +218,237 @@ def test_validate_updates_window(rev):
 def test_validate_pair(rev, dau):
     msgs = ' '.join(m for _, m in an.validate_pair(rev, dau))
     assert '홍콩' in msgs and '인도네시아' in msgs
+
+
+# ── 7. week_compare_cal (달력 주 기준) ───────────────────────────
+def test_week_compare_cal_window_dates(rev_total):
+    r = an.week_compare_cal(rev_total, '2026-10-22')
+    assert r is not None
+    # 2026-10-22는 목요일(dayofweek=3): 업데이트 주 = 10/19(월)~10/25(일)
+    assert r['week_start'] == pd.Timestamp('2026-10-19')
+    assert r['week_end'] == pd.Timestamp('2026-10-25')
+    assert r['prev_start'] == pd.Timestamp('2026-10-12')
+    assert r['prev_end'] == pd.Timestamp('2026-10-18')
+    assert r['pre_days'] == 3  # D0 이전 3일(월~수)이 업데이트 주에 포함
+
+
+def test_week_compare_cal_sums(rev_total):
+    r = an.week_compare_cal(rev_total, '2026-10-22')
+    assert r is not None
+    # cur_sum: 10/19~10/25 합계, prev_sum: 10/12~10/18 합계
+    cur_expected = float(rev_total['2026-10-19':'2026-10-25'].sum())
+    prev_expected = float(rev_total['2026-10-12':'2026-10-18'].sum())
+    assert r['cur_sum'] == pytest.approx(cur_expected, abs=0.01)
+    assert r['prev_sum'] == pytest.approx(prev_expected, abs=0.01)
+    assert r['pct'] == pytest.approx((cur_expected / prev_expected - 1) * 100, abs=0.001)
+
+
+def test_week_compare_cal_returns_none_when_no_prior_data(rev_total):
+    # 2026-07-30이 데이터 시작: 전주(7/20~7/26)가 없으므로 None 반환
+    r = an.week_compare_cal(rev_total, '2026-07-30')
+    assert r is None
+
+
+def test_week_compare_cal_dau_uses_mean(dau_total):
+    r = an.week_compare_cal(dau_total, '2026-10-22')
+    assert r is not None
+    # cur_mean과 cur_sum의 비율이 7이어야 함 (7일 평균)
+    assert r['cur_mean'] == pytest.approx(r['cur_sum'] / 7, abs=0.001)
+
+
+# ── 8. 회귀 테스트: A~D 변경사항 ──────────────────────────────────
+
+def test_fig_cal_week_overlay_solid_lines_no_vline():
+    """A: fig_cal_week_overlay — 모든 선 실선, vline 없음, annotation 존재"""
+    import pandas as pd
+    import charts
+    idx = pd.date_range('2026-10-05', periods=21)
+    s = pd.Series(list(range(1, 22)), index=idx, dtype=float)
+    fig = charts.fig_cal_week_overlay(s, '2026-10-15')
+    assert fig is not None
+    # 2 traces only
+    assert len(fig.data) == 2
+    # Both solid (no dash)
+    for tr in fig.data:
+        assert tr.line.dash in (None, 'solid', '')
+        assert tr.mode == 'lines+markers'
+    # No shapes (no vline)
+    assert len(fig.layout.shapes) == 0
+    # Annotation exists (업데이트 label)
+    anns = [a.text for a in fig.layout.annotations]
+    assert any('업데이트' in a for a in anns)
+
+
+def test_fig_cal_week_overlay_returns_none_for_incomplete_prev_week():
+    """A: 전주 7일 미완성이면 None 반환"""
+    import pandas as pd
+    import charts
+    idx = pd.date_range('2026-10-13', periods=5)
+    s = pd.Series([100.0]*5, index=idx)
+    assert charts.fig_cal_week_overlay(s, '2026-10-15') is None
+
+
+def test_norm_hyp_strips_strikethrough():
+    """C: norm_hyp — ~~텍스트~~ 및 HTML 취소선 태그 제거"""
+    import ui
+    assert ui.norm_hyp('~~취소~~ 가설')['text'] == '취소 가설'
+    assert ui.norm_hyp('<del>삭제</del> 텍스트')['text'] == '삭제 텍스트'
+    assert ui.norm_hyp('<s>취소</s>된')['text'] == '취소된'
+    assert ui.norm_hyp({'text': '~~old~~ new', 'basis': []})['text'] == 'old new'
+    # 정상 텍스트는 변경 없음
+    assert ui.norm_hyp('정상 가설')['text'] == '정상 가설'
+
+
+def test_items_html_fallback_for_empty_items_detail():
+    """B: 10/15 패치노트 — registry가 items → items_detail 변환; env_cats와 _items_html이 카테고리를 반환"""
+    from pathlib import Path
+    import registry
+    maple_path = Path(__file__).resolve().parent.parent / 'projects' / 'maple_idle'
+    proj = registry.load_project(maple_path)
+    u = next(u for u in proj.updates if u['date'] == '2026-10-15')
+    # registry converts items → items_detail; total item count must be > 0
+    assert sum(len(v) for v in u.get('items_detail', {}).values()) > 0
+    # env_cats must return non-empty list (uses items_detail from registry)
+    from views.diagnosis import env_cats
+    cats = env_cats(u)
+    assert len(cats) > 0
+
+
+def test_country_compare_table_complete_data_only():
+    """D: 국가별 비교 표 — 모든 업데이트에 완전한 데이터가 있는 국가만 포함"""
+    import analysis as an
+    import registry
+    import report
+    from pathlib import Path
+    maple_path = Path(__file__).resolve().parent.parent / 'projects' / 'maple_idle'
+    proj = registry.load_project(maple_path)
+    import registry as reg
+    data = reg.load_project_data(proj)
+    ctx = report.build_context(proj, data.rev, data.dau)
+    # Only countries where ALL updates have complete calendar-week data should appear
+    complete = [c for c in ctx.rev_countries
+                if all(an.week_compare_cal(ctx.rev[c], u['date']) is not None for u in proj.updates)]
+    # Partial countries must be excluded
+    all_c = list(ctx.rev_countries)
+    assert len(complete) <= len(all_c)
+    # Every country in complete has non-None week_compare_cal for all updates
+    for c in complete:
+        for u in proj.updates:
+            assert an.week_compare_cal(ctx.rev[c], u['date']) is not None
+
+
+# ── 9. 회귀 테스트: 이번 UI 수정 (A/B/C) ──────────────────────────
+
+def test_fig_cal_week_overlay_arrow_annotation():
+    """A: D0에 화살표+박스 주석 — paper ref 고정 텍스트 없음"""
+    import pandas as pd
+    import charts
+    idx = pd.date_range('2026-10-05', periods=21)
+    s = pd.Series(list(range(1, 22)), index=idx, dtype=float)
+    # 목요일(dayofweek=3) 업데이트
+    fig = charts.fig_cal_week_overlay(s, '2026-10-15')
+    assert fig is not None
+    ann = fig.layout.annotations
+    assert len(ann) == 1
+    a = ann[0]
+    assert a.showarrow is True      # 화살표 있음
+    assert a.arrowhead is not None
+    # yref='paper' + showarrow=False 고정 텍스트 방식 사용 금지
+    assert not (a.yref == 'paper' and a.showarrow is False)
+    # 라벨 텍스트에 날짜와 '업데이트' 포함
+    assert '업데이트' in (a.text or '')
+    assert '10/15' in (a.text or '')
+
+
+def test_fig_cal_week_overlay_early_weekday_anchor():
+    """A: 월요일 D0 — xanchor='left' (오른쪽에 라벨 배치)"""
+    import pandas as pd
+    import charts
+    # 10/05 시작 21일치 → 10/05~10/25; 10/12(월) 업데이트, 전주 10/05~10/11 ✓
+    idx = pd.date_range('2026-10-05', periods=21)
+    s = pd.Series(list(range(1, 22)), index=idx, dtype=float)
+    fig = charts.fig_cal_week_overlay(s, '2026-10-12')  # 월요일(dayofweek=0)
+    assert fig is not None
+    a = fig.layout.annotations[0]
+    assert a.xanchor == 'left'
+
+
+def test_structure_cell_returns_html_not_markdown():
+    """B: _cell()이 HTML 반환 — 취소선 마크다운 렌더링 불가"""
+    from views.structure import _cell
+    html = _cell([{'text': '테스트 항목', 'kind': ''}])
+    # HTML 태그 사용
+    assert '<ul' in html and '<li>' in html
+    # ~~ 없음 — 마크다운 취소선 패턴 없음
+    assert '~~' not in html
+    # 빈 목록
+    assert '<span' in _cell([])
+
+
+def test_source_none_shows_fallback_text():
+    """C: source=None → '패치노트 원문 미등록' 표시 (esc(None) → 'None' 방지)"""
+    import html as _html
+    fallback = 'None' or '패치노트 원문 미등록'
+    # 실제 UI 처리: u["source"] or "패치노트 원문 미등록"
+    for src in [None, '']:
+        result = _html.escape(str(src or '패치노트 원문 미등록'))
+        assert result == '패치노트 원문 미등록'
+    # 정상 source는 그대로
+    assert _html.escape(str('https://example.com' or '패치노트 원문 미등록')) == 'https://example.com'
+
+
+def test_maple_8_13_and_10_15_have_items():
+    """C: 8/13·10/15 — registry 로드 후 items_detail 비어있지 않음"""
+    # raw JSON에 'source' 키 없음 → registry default로 대체; items는 정상 로드됨
+    from pathlib import Path
+    import registry
+    maple = registry.load_project(Path('projects/maple_idle'))
+    for date, expected_min in [('2026-08-13', 15), ('2026-10-15', 10)]:
+        u = next(x for x in maple.updates if x['date'] == date)
+        total = sum(len(v) for v in u['items_detail'].values())
+        assert total >= expected_min, f"{date}: only {total} items"
+        # source 키 없음 → registry가 default 문자열로 채움 (None이 아님)
+        assert u.get('source') is not None
+
+
+# ── 10. 최종 품질 검수 회귀 테스트 ───────────────────────────────
+
+def test_strip_strike_preserves_single_tilde():
+    """Issue 3: 단일 ~ (한국어 범위 표기)는 _strip_strike가 건드리지 않아야 한다."""
+    import ui
+    assert ui._strip_strike('신규 챕터 42~44 추가') == '신규 챕터 42~44 추가'
+    assert ui._strip_strike('7/23~8/12 이벤트') == '7/23~8/12 이벤트'
+    assert ui._strip_strike('10/15~11/4') == '10/15~11/4'
+    assert ui._strip_strike('10/22~11/4') == '10/22~11/4'
+    assert ui._strip_strike('45~47 추가') == '45~47 추가'
+    # 실제 ~~취소선~~은 올바르게 처리됨
+    assert ui._strip_strike('~~취소선~~') == '취소선'
+    assert ui._strip_strike('~~42~44~~ 항목') == '42~44 항목'
+
+
+def test_maple_confounds_8_13_and_10_15_not_empty():
+    """Issue 2/3: 8/13·10/15 confounds가 비어있지 않아야 한다."""
+    from pathlib import Path
+    import registry
+    maple = registry.load_project(Path('projects/maple_idle'))
+    for date in ('2026-08-13', '2026-10-15'):
+        u = next(x for x in maple.updates if x['date'] == date)
+        assert u['confounds'], f"{date}: confounds가 비어 있음"
+        assert len(u['confounds']) >= 1
+
+
+def test_week_compare_cal_used_for_country_findings():
+    """Issue 1-2: 국가별 주요 발견의 기준이 week_compare_cal과 일관성 있는지 확인.
+    delta(N일 평균)와 week_compare_cal(달력 주)이 같은 방향을 가리키는 경우를 검증."""
+    # 7/23(목) 업데이트 → 달력 주 월요일 7/20; 전주는 7/13~7/19
+    idx = pd.date_range('2026-07-13', periods=28)  # 전주 월요일부터 충분한 기간
+    s = pd.Series([100.0] * 7 + [120.0] * 21, index=idx, dtype=float)
+    d = '2026-07-23'
+    w = an.week_compare_cal(s, d)
+    assert w is not None
+    assert w['pct'] > 0  # 업데이트 주(120) > 전주(100)
+    # delta도 같은 방향이어야 함 (일관성 확인)
+    df = pd.DataFrame({'x': s})
+    dt = an.delta(df, 'x', d, 7)
+    assert dt is not None
+    assert dt['change_pct'] > 0

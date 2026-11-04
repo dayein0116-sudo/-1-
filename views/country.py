@@ -1,4 +1,4 @@
-"""국가별 — 국가 1개를 골라 업데이트별 (이전 7일 vs 이후 7일)을 봅니다."""
+"""국가별 — 국가 1개를 골라 업데이트별 (전주 vs 업데이트 주)을 봅니다."""
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -20,16 +20,16 @@ def _tag(ctx, c):
 
 def render(env):
     ctx, n, ups = env.ctx, env.window, env.project.updates
-    cur_l, prev_l = report.period_labels(n)
+    cur_l, prev_l = report.cal_period_labels()
     d_upd = env.upd['date']
 
     def _available(c):
         if c in ctx.common:
             return True
         if c in ctx.dau.columns and c not in ctx.rev.columns:
-            return an.week_compare(ctx.dau[c], d_upd, n) is not None
+            return an.week_compare_cal(ctx.dau[c], d_upd) is not None
         if c in ctx.rev.columns and c not in ctx.dau.columns:
-            return an.week_compare(ctx.rev[c], d_upd, n) is not None
+            return an.week_compare_cal(ctx.rev[c], d_upd) is not None
         return True
 
     avail_countries = [c for c in ctx.display_countries if _available(c)]
@@ -42,16 +42,16 @@ def render(env):
         ser = df[country]
         rows, labs, prevs, curs = [], [], [], []
         for u in ups:
-            w, x = an.week_compare(ser, u['date'], n), an.day_vs_prev(ser, u['date'], 0, n)
-            mult = (ui.KRW_RATE / 1e8) if key == 'rev' else (1 / n)
+            w = an.week_compare_cal(ser, u['date'])
+            mult = (ui.KRW_RATE / 1e8) if key == 'rev' else (1 / 7)
             labs.append(u['date'][5:])
             prevs.append(w['prev_sum'] * mult if w else None)
             curs.append(w['cur_sum'] * mult if w else None)
-            rows.append({'업데이트': u['date'], 'D0': (ui.fmt_krw(x['cur']) if key == 'rev' else ui.fmt_dau(x['cur'])) if x else '분析 불가',
-                         'D0 (참고: 7일 전 같은 요일 대비)': fp(x['pct']) if x else '분석 불가',
-                         f'{prev_l} {unit}': (ui.fmt_krw(w['prev_sum']) if key == 'rev' else f"{w['prev_sum'] * mult:,.0f}명") if w else '분析 불가',
-                         f'{cur_l} {unit}': (ui.fmt_krw(w['cur_sum']) if key == 'rev' else f"{w['cur_sum'] * mult:,.0f}명") if w else '분析 불가',
-                         '증감액': (ui.fmt_krw_delta(w['cur_sum'] - w['prev_sum']) if key == 'rev' else f"{(w['cur_sum'] - w['prev_sum']) * mult:+,.0f}명") if w else '分析 불가', '증감률': fp(w['pct']) if w else '分析 불가'})
+            rows.append({'업데이트': u['date'],
+                         f'{prev_l} {unit}': (ui.fmt_krw(w['prev_sum']) if key == 'rev' else f"{w['prev_sum'] * mult:,.0f}명") if w else '분석 불가',
+                         f'{cur_l} {unit}': (ui.fmt_krw(w['cur_sum']) if key == 'rev' else f"{w['cur_sum'] * mult:,.0f}명") if w else '분석 불가',
+                         '증감액': (ui.fmt_krw_delta(w['cur_sum'] - w['prev_sum']) if key == 'rev' else f"{(w['cur_sum'] - w['prev_sum']) * mult:+,.0f}명") if w else '분석 불가',
+                         '증감률': fp(w['pct']) if w else '분석 불가'})
         with st.container(key=f'card_ctry_{key}'):
             ui.card_title(f'{country} · {lab}', f'{cur_l} {unit} vs {prev_l} {unit} · {"원화 환산 (1 USD = 1,350원)" if key == "rev" else "원본 단위"}')
             c1, c2 = st.columns([1.2, 1])
@@ -64,7 +64,9 @@ def render(env):
         t1, t2 = st.columns(2)
         for col, df, lab in ((t1, ctx.rev, '추정 매출'), (t2, ctx.dau, 'DAU')):
             if country in df:
-                fig = go.Figure(go.Scatter(x=df.index, y=df[country], mode='lines', line=dict(color=charts.BLUE)))
+                line_color = charts.BLUE if lab == '추정 매출' else charts.GREEN
+                fig = go.Figure(go.Scatter(x=df.index, y=df[country], mode='lines', line=dict(color=line_color)))
                 fig.update_layout(title=f'{country} 일별 {lab}', height=300, margin=dict(l=8, r=8, t=40, b=8))
+                fig.update_xaxes(type='date', tickformat='%Y/%m')
                 col.plotly_chart(ui.mark_updates(fig, ups), width='stretch', config={'displayModeBar': False})
         st.caption('점선: 업데이트 날짜 표시. 매출과 DAU는 단위·범위가 달라 결합하지 않습니다.')

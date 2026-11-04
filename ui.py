@@ -1,5 +1,6 @@
 """화면 공통 요소: 스타일(CSS), 카드, 표시 형식. 계산은 하지 않습니다 (analysis.py / report.py)."""
 import html
+import re
 
 import numpy as np
 import pandas as pd
@@ -272,8 +273,13 @@ def goto(page):
     st.session_state['page'] = page
 
 
+def _strip_strike(t):
+    t = re.sub(r'~~(.+?)~~', r'\1', t)
+    t = re.sub(r'</?(?:del|s|strike)[^>]*>', '', t)
+    return t
+
 def norm_hyp(h):
     """가설 항목은 문자열 또는 {text, basis}"""
     if isinstance(h, str):
-        return {'text': h, 'basis': []}
-    return {'text': h.get('text', ''), 'basis': list(h.get('basis', []))}
+        return {'text': _strip_strike(h), 'basis': []}
+    return {'text': _strip_strike(h.get('text', '')), 'basis': list(h.get('basis', []))}
