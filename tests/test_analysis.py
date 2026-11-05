@@ -594,15 +594,15 @@ def test_cycle_compare_last_incomplete(rev_total):
     assert last['d_end'] == str(rev_total.index.max().date())
 
 
-def test_cycle_compare_same_length_uses_sum(rev_total):
-    """8/13(14일)·8/27(14일) — 동일 기간이므로 합계 변화율."""
+def test_cycle_compare_same_length_uses_daily_avg(rev_total):
+    """8/13(14일)·8/27(14일) — 주기 길이 동일해도 항상 일평균 기준으로 비교."""
     rows = an.cycle_compare(rev_total, UPDS)
     r13 = next(x for x in rows if x['date'] == '2026-08-13')
     r27 = next(x for x in rows if x['date'] == '2026-08-27')
     assert r13['days'] == 14 and r27['days'] == 14
     assert r13['complete'] and r27['complete']
-    assert r27['change_type'] == 'sum'
-    expected = (r27['total'] / r13['total'] - 1) * 100
+    assert r27['change_type'] == 'daily_avg'
+    expected = (r27['daily_avg'] / r13['daily_avg'] - 1) * 100
     assert r27['change_pct'] == pytest.approx(expected, abs=0.001)
 
 
@@ -751,18 +751,62 @@ def test_cycle_compare_incomplete_no_compare_pct(maple_rev_total):
     assert not r['can_compare'] and r['change_pct'] is None
 
 
-def test_cycle_compare_cookierun_all_change_types(rev_total):
-    """쿠키런 완료 주기: 같은 길이=합계, 다른 길이=일평균 규칙 전수 검증.
-    8/13(14d)-8/27(14d): sum / 8/27(14d)-9/10(13d): daily_avg /
-    9/10(13d)-9/23(15d): daily_avg / 9/23(15d)-10/8(14d): daily_avg"""
+def test_cycle_compare_cookierun_all_daily_avg(rev_total):
+    """쿠키런 완료 주기: 주기 길이에 관계없이 항상 일평균 기준으로 비교.
+    8/27(14d) -12.0% / 9/10(13d) -45.4% / 9/23(15d) +14.0% / 10/8(14d) -42.4%"""
     rows = an.cycle_compare(rev_total, UPDS, next_update_date='2026-11-05')
     by_date = {r['date']: r for r in rows}
-    # 8/27: 직전 8/13과 같은 길이(14=14) → 합계
-    assert by_date['2026-08-27']['change_type'] == 'sum'
-    # 9/10: 직전 8/27(14) vs 현재(13) → 일평균
-    assert by_date['2026-09-10']['change_type'] == 'daily_avg'
-    # 9/23: 직전 9/10(13) vs 현재(15) → 일평균
-    assert by_date['2026-09-23']['change_type'] == 'daily_avg'
-    # 10/8: 직전 9/23(15) vs 현재(14) → 일평균 (보고서 오기 방지)
-    assert by_date['2026-10-08']['change_type'] == 'daily_avg'
+    for date in ['2026-08-27', '2026-09-10', '2026-09-23', '2026-10-08']:
+        assert by_date[date]['change_type'] == 'daily_avg'
+    assert by_date['2026-08-27']['change_pct'] == pytest.approx(-12.0, abs=0.1)
+    assert by_date['2026-09-10']['change_pct'] == pytest.approx(-45.4, abs=0.1)
+    assert by_date['2026-09-23']['change_pct'] == pytest.approx(14.0, abs=0.1)
     assert by_date['2026-10-08']['change_pct'] == pytest.approx(-42.4, abs=0.1)
+
+
+# ── 15. 원화 금액 표시 함수 (fmt_krw / fmt_krw_delta) ───────────────────
+# 반올림 정책: Python f-string :.1f 및 round()는 모두 "round half to even" (은행가 반올림).
+# 경계값(X.X5억)은 IEEE 754 부동소수점 표현에 따라 미세하게 아래로 내려갈 수 있으며,
+# 이 경우 아래 단위로 반올림됩니다. 금융 표시 목적으로 일관성 있고 재현 가능합니다.
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import ui as _ui
+
+
+def test_fmt_krw_cookierun_1008():
+    """쿠키런 10/08 주기 매출 $1,105,140.39 × 1,350 = 14.919억 → 약 14.9억 원."""
+    assert _ui.fmt_krw(1_105_140.39) == '약 14.9억 원'
+
+
+def test_fmt_krw_user_example_1point1():
+    """사용자 예시: 1.0657억 원 → 약 1.1억 원."""
+    assert _ui.fmt_krw(1.0657e8 / _ui.KRW_RATE) == '약 1.1억 원'
+
+
+def test_fmt_krw_rounding_normal():
+    """반올림 일반: 소수 둘째 자리 이하는 소수 첫째 자리로 반올림.
+    14.91억 → 14.9억, 14.96억 → 15.0억 (1억 = 1e8 KRW)."""
+    assert _ui.fmt_krw(14.91e8 / _ui.KRW_RATE) == '약 14.9억 원'
+    assert _ui.fmt_krw(14.96e8 / _ui.KRW_RATE) == '약 15.0억 원'
+
+
+def test_fmt_krw_boundary_half_to_even():
+    """경계값: Python round half-to-even + IEEE 754 표현에 따른 실제 동작 고정."""
+    assert _ui.fmt_krw(14.95e8 / _ui.KRW_RATE) == '약 14.9억 원'
+    assert _ui.fmt_krw(14.85e8 / _ui.KRW_RATE) == '약 14.8억 원'
+
+
+def test_fmt_krw_man_unit_rounding():
+    """만 단위: int(round()) 반올림 — 149.5만 → 150만, 148.5만 → 148만 (round half-to-even)."""
+    assert _ui.fmt_krw(1_495_000 / _ui.KRW_RATE) == '약 150만 원'
+    assert _ui.fmt_krw(1_485_000 / _ui.KRW_RATE) == '약 148만 원'
+
+
+def test_fmt_krw_none():
+    assert _ui.fmt_krw(None) == '분析 불가'
+
+
+def test_fmt_krw_delta_cookierun_1008():
+    """fmt_krw_delta: 부호 포함 억 단위 반올림."""
+    assert _ui.fmt_krw_delta(1_105_140.39) == '+14.9억 원'
+    assert _ui.fmt_krw_delta(-1_105_140.39) == '-14.9억 원'

@@ -66,8 +66,7 @@ def render(env):
             status = f'진행 중 ({v}일)'
 
         if cy['can_compare'] and cy['change_pct'] is not None:
-            basis = '합계' if cy['change_type'] == 'sum' else '일평균'
-            change_str = f"{cy['change_pct']:+.1f}%  ({basis} 기준)"
+            change_str = f"{cy['change_pct']:+.1f}%"
         else:
             change_str = '비교 불가 — 주기 미완료'
 
@@ -93,7 +92,7 @@ def render(env):
     with st.container(key='card_cmp_rev'):
         ui.card_title(
             '추정 매출 — 업데이트 주기별',
-            f'D0~다음D0-1 성과 · 일수 = 유효/전체 · 원화 환산 (1 USD = 1,350원) · {env.rep["rev_scope_label"]}'
+            f'D0~다음D0-1 성과 · 직전 주기 대비 변화율은 일평균 추정 매출 기준 · 일수 = 유효/전체 · 원화 환산 (1 USD = 1,350원) · {env.rep["rev_scope_label"]}'
         )
         ui.table(pd.DataFrame(rows))
         ui.show(charts.fig_group_bars(labels, prevs, curs, '직전 주기 일평균', '이번 주기 일평균', charts.BLUE, unit='억원'))

@@ -619,13 +619,9 @@ def cycle_compare(rev_total, updates, cutoff_date=None, next_update_date=None):
             row.update({'prev_daily_avg': prev['daily_avg'],
                         'change_pct': None, 'change_type': None, 'can_compare': False})
             continue
-        # 동일 기간: 합계 변화율 / 다른 기간: 일평균 변화율
-        if prev['days'] == row['days']:
-            pct = (row['total'] / prev['total'] - 1) * 100 if prev['total'] and prev['total'] > 0 else None
-            ctype = 'sum'
-        else:
-            pct = (row['daily_avg'] / prev['daily_avg'] - 1) * 100
-            ctype = 'daily_avg'
+        # 주기 길이에 관계없이 항상 일평균 기준으로 비교
+        pct = (row['daily_avg'] / prev['daily_avg'] - 1) * 100
+        ctype = 'daily_avg'
         row.update({'prev_daily_avg': prev['daily_avg'],
                     'change_pct': pct, 'change_type': ctype, 'can_compare': pct is not None})
     return rows

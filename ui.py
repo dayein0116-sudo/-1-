@@ -21,7 +21,7 @@ def fmt_krw(v):
     if krw >= 1e8:
         return f'약 {krw / 1e8:.1f}억 원'
     if krw >= 1e4:
-        return f'약 {int(krw / 1e4):,}만 원'
+        return f'약 {int(round(krw / 1e4)):,}만 원'
     return f'{krw:,.0f}원'
 
 
