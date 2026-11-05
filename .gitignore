@@ -12,3 +12,7 @@ projects/*/incoming/
 *.docx
 *.xlsx
 *.pptx
+
+# CSV 백업 파일 (로컬 작업용, 배포 제외)
+*.csv.bak
+*.csv.bak2

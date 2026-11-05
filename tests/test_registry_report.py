@@ -158,10 +158,14 @@ def test_load_project_data_with_upload_extends_period(project):
     rev = pd.read_csv(project.path('revenue'), encoding='utf-8-sig')
     first = rev.columns[0]
     nxt = rev.tail(1).copy()
-    nxt[first] = '2026-11-01'  # 10월 데이터 병합 후 기존 마지막 날은 10/31 → 11/1로 연장
+    nxt[first] = '2026-11-01'  # cutoff(10/27) 이후 날짜 — 병합은 되지만 cutoff로 최종 제거
     buf = io.StringIO(); nxt.to_csv(buf, index=False)
     d = registry.load_project_data(project, extra_rev=io.BytesIO(buf.getvalue().encode('utf-8')))
-    assert d.rev.index.max() == pd.Timestamp('2026-11-01') and d.merge_info['rev']['new_dates'] == 1 and d.merge_info['dau'] is None
+    # 병합 중 11/01이 추가됨(new_dates=1)이지만, cutoff(10/27)가 사후 적용돼 최종 max=10/27
+    assert d.rev.index.max() == pd.Timestamp('2026-10-27')
+    assert d.merge_info['rev']['new_dates'] == 1
+    assert d.merge_info['dau'] is None
+    assert d.data_cutoff == '2026-10-27'
 
 
 def test_timing_flags_for_0923(project, ctx):
@@ -253,3 +257,60 @@ def test_scope_labels_name_the_metric(project, ctx):
     rep = report.build_update_report(ctx, upd(project, '2026-09-23'), 7, 'common')
     assert rep['dau_scope_label'] == '공통 6개국 DAU 합계' and rep['rev_scope_label'] == '공통 6개국 매출 합계'
     assert 'DAU 파일 전체' in report.build_update_report(ctx, upd(project, '2026-09-23'), 7, 'file')['dau_scope_label']
+
+
+# ── 메이플 cutoff 2026-10-27 전역 적용 (Phase 2 최종) ────────────────────────
+
+MAPLE_ROOT = Path(__file__).resolve().parent.parent / 'projects' / 'maple_idle'
+
+
+@pytest.fixture(scope='module')
+def maple_project():
+    return registry.load_project(MAPLE_ROOT)
+
+
+@pytest.fixture(scope='module')
+def maple_data(maple_project):
+    return registry.load_project_data(maple_project)
+
+
+def test_maple_cutoff_applied(maple_data):
+    """메이플 cutoff 2026-10-27이 rev·dau 모두에 적용됨."""
+    assert maple_data.data_cutoff == '2026-10-27'
+    assert maple_data.rev.index.max() == pd.Timestamp('2026-10-27')
+    assert maple_data.dau.index.max() == pd.Timestamp('2026-10-27')
+
+
+def test_maple_1015_cycle_13_of_21(maple_project, maple_data):
+    """메이플 10/15 주기: cutoff → 13/21일, 비교 불가."""
+    cycles = an.cycle_compare(
+        maple_data.rev.sum(axis=1), maple_project.updates,
+        cutoff_date=maple_data.data_cutoff,
+        next_update_date=maple_data.next_update_date,
+    )
+    r = next(x for x in cycles if x['date'] == '2026-10-15')
+    assert r['valid_days'] == 13 and r['days'] == 21
+    assert r['truncated'] and not r['complete']
+    assert not r['can_compare'] and r['change_pct'] is None
+
+
+def test_maple_1015_total_cutoff(maple_project, maple_data):
+    """메이플 10/15~10/27 (13일) 추정 매출 합계."""
+    cycles = an.cycle_compare(
+        maple_data.rev.sum(axis=1), maple_project.updates,
+        cutoff_date=maple_data.data_cutoff,
+        next_update_date=maple_data.next_update_date,
+    )
+    r = next(x for x in cycles if x['date'] == '2026-10-15')
+    assert r['total'] == pytest.approx(4_880_132, abs=1.0)
+
+
+def test_maple_complete_cycles_unaffected_by_cutoff(maple_project, maple_data):
+    """10/27 cutoff는 10/14 이전에 종료된 완료 주기에 영향 없음."""
+    cycles = an.cycle_compare(
+        maple_data.rev.sum(axis=1), maple_project.updates,
+        cutoff_date=maple_data.data_cutoff,
+        next_update_date=maple_data.next_update_date,
+    )
+    for cy in cycles[:-1]:   # 마지막(10/15) 제외
+        assert cy['complete'] and not cy['truncated']

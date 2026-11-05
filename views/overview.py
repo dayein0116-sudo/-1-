@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import analysis
 import charts
 import ui
 
@@ -68,3 +69,142 @@ def render(env):
             fig.update_layout(title=title, height=300, margin=dict(l=8, r=8, t=40, b=8),
                               yaxis=dict(ticksuffix=suffix))
             st.plotly_chart(ui.mark_updates(fig, p.updates), width='stretch', config={'displayModeBar': False})
+
+    # ── 매출 추세 진단 ─────────────────────────────────────────
+    st.markdown('---')
+    st.markdown('#### 매출 추세 진단')
+    st.caption('관측 기간 내 전체 매출 흐름 — 개별 업데이트 반응이 아닌 중기 추세를 확인합니다.')
+
+    _upd_dates = [u['date'] for u in p.updates]
+    _rev = ctx.rev.sum(axis=1, min_count=1)
+    _dau = ctx.dau.sum(axis=1, min_count=1)
+    _ts = analysis.revenue_trend_stats(_rev, _upd_dates)
+    _bs = analysis.baseline_level(_rev, _upd_dates)
+    _pers = analysis.rebound_persistence_all(_rev, _upd_dates)
+    _cc = analysis.country_half_compare(ctx.rev, ctx.common)
+    _ds = analysis.revenue_trend_stats(_dau, _upd_dates)
+    _h = _ts.get('half_days', 21)
+
+    # A-1: 추세 차트 + 7일 이동평균
+    _ma7 = _rev.rolling(7, center=True, min_periods=4).mean()
+    _rev_krw = _rev * ui.KRW_RATE / 1e8
+    _ma_krw = _ma7 * ui.KRW_RATE / 1e8
+    _fig = go.Figure()
+    _fig.add_trace(go.Scatter(x=_rev_krw.index, y=_rev_krw.values, mode='lines',
+                               name='일별 추정 매출', line=dict(color='rgba(99,110,250,0.35)', width=1)))
+    _fig.add_trace(go.Scatter(x=_ma_krw.index, y=_ma_krw.values, mode='lines',
+                               name='7일 이동평균 (추세 참고)', line=dict(color=charts.BLUE, width=2.5)))
+    _fig.update_layout(height=300, margin=dict(l=8, r=8, t=40, b=8),
+                        title='일별 추정 매출 · 7일 이동평균 (파일 전체 합계, 억 원)',
+                        yaxis=dict(ticksuffix='억원'),
+                        legend=dict(orientation='h', y=1.15))
+    st.plotly_chart(ui.mark_updates(_fig, p.updates), width='stretch', config={'displayModeBar': False})
+    if _ts['can_compare']:
+        st.markdown(
+            f'초반 **{_h}일** ({_ts["first_start"]:%m/%d}~{_ts["first_end"]:%m/%d}) 일평균 **${_ts["first_mean"]:,.0f}** · '
+            f'후반 **{_h}일** ({_ts["last_start"]:%m/%d}~{_ts["last_end"]:%m/%d}) 일평균 **${_ts["last_mean"]:,.0f}** '
+            f'({_ts["change_pct"]:+.1f}%)'
+        )
+    st.caption(f'※ 7일 이동평균은 추세 시각화용이며 단독으로 원인을 판정하지 않습니다. 초반·후반은 각 {_h}일({_h // 7}주)로 요일 구성이 같습니다.')
+
+    # A-2: 업데이트 영향권 제외 기저 수준
+    st.markdown('**업데이트 영향권 제외 기저 수준** (D-2 ~ D+6 차단)')
+    if _bs['can_compute']:
+        st.markdown(
+            f'영향권 제외 후 **{_bs["day_count"]}일** 샘플 · 일평균 **${_bs["mean"]:,.0f}** '
+            f'({_bs["date_min"]:%m/%d}~{_bs["date_max"]:%m/%d} 범위에 분포)'
+        )
+    else:
+        st.warning(_bs['reason'])
+
+    # A-3: 반응 지속성 (D0~D2 vs D3~D6, 평균 대 평균)
+    st.markdown('**업데이트 반응 지속성** (D0~D2 초기 vs D3~D6 후기 — 직전 7일 대비 배수, 평균)')
+    _prows = []
+    for _r in _pers:
+        _pd = _r['persistence']
+        if _pd:
+            _prows.append({'업데이트': _r['date'],
+                            'D0~D2 초기': round(_pd['early'], 2),
+                            'D3~D6 후기': round(_pd['late'], 2),
+                            '후기/초기': round(_pd['retention'], 2)})
+        else:
+            _prows.append({'업데이트': _r['date'], 'D0~D2 초기': '자료 부족', 'D3~D6 후기': '-', '후기/초기': '-'})
+    ui.table(pd.DataFrame(_prows))
+    st.caption('1.0 미만이 반드시 반응 실패를 뜻하지 않습니다 — 직전 추세가 하락 중이면 1.0 이상 반응도 추세 연장일 수 있습니다.')
+
+    # A-4: 매출 vs DAU 추세
+    st.markdown('**매출 vs DAU 추세 비교**')
+    if _ts['can_compare'] and _ds['can_compare']:
+        _rev_dir = '감소' if _ts['change_pct'] < -5 else ('증가' if _ts['change_pct'] > 5 else '보합')
+        _dau_dir = '감소' if _ds['change_pct'] < -5 else ('증가' if _ds['change_pct'] > 5 else '보합')
+        st.markdown(
+            f'초반→후반 {_h}일: 매출 {_ts["change_pct"]:+.1f}% (**{_rev_dir}**) · DAU {_ds["change_pct"]:+.1f}% (**{_dau_dir}**)'
+        )
+        if _rev_dir == _dau_dir:
+            st.caption('매출과 DAU가 같은 방향으로 변화했습니다. 이용자 수 변화가 매출 변화와 연동되어 있을 가능성이 있으나, 1인당 매출 기여는 별도 확인이 필요합니다.')
+        else:
+            st.caption('매출과 DAU의 방향이 다릅니다. 이용자 수와 무관한 구매 행동 변화 가능성이 있습니다.')
+    else:
+        st.caption('데이터 기간이 짧아 비교 불가')
+
+    # A-5: 공통 국가별 매출 변화
+    st.markdown(f'**공통 국가별 매출 변화** ({len(ctx.common)}개국 · 초반 vs 후반 각 {_h}일 평균)')
+    if _cc:
+        _crows = []
+        for _c, _cr in _cc.items():
+            if _cr['can_compare']:
+                _crows.append({'국가': _c, '초반 일평균 (USD)': f'${_cr["first_mean"]:,.0f}',
+                                '후반 일평균 (USD)': f'${_cr["last_mean"]:,.0f}',
+                                '변화율': f'{_cr["change_pct"]:+.1f}%'})
+            else:
+                _crows.append({'국가': _c, '초반 일평균 (USD)': '-', '후반 일평균 (USD)': '-',
+                                '변화율': _cr.get('reason', '비교 불가')})
+        ui.table(pd.DataFrame(_crows))
+
+    # Feature B: 사업적 시사점 (Python 계산 기반)
+    with st.expander('매출 추세 사업적 시사점 (Python 계산 기반)', expanded=False):
+        st.markdown('**핵심 진단**')
+        if _ts['can_compare']:
+            _chg = _ts['change_pct']
+            _fm, _lm = f'${_ts["first_mean"]:,.0f}', f'${_ts["last_mean"]:,.0f}'
+            if _chg < -15:
+                st.markdown(f'초반 {_h}일({_ts["first_start"]:%m/%d}~{_ts["first_end"]:%m/%d}) 일평균 {_fm} 대비 후반 {_h}일({_ts["last_start"]:%m/%d}~{_ts["last_end"]:%m/%d}) 일평균 {_lm}로 **{_chg:+.1f}%** 차이가 관측됩니다.')
+            elif _chg > 15:
+                st.markdown(f'초반 {_h}일 일평균 {_fm} 대비 후반 {_h}일 일평균 {_lm}로 **{_chg:+.1f}%** 차이가 관측됩니다.')
+            else:
+                st.markdown(f'초반·후반 {_h}일 간 뚜렷한 방향성이 확인되지 않습니다 ({_chg:+.1f}%).')
+        else:
+            st.markdown(_ts['reason'])
+
+        st.markdown('**확인된 현상**')
+        _obs = []
+        if _ts['can_compare']:
+            _obs.append(f'추정 매출 초반→후반 {_ts["change_pct"]:+.1f}% (각 {_h}일 평균 · 요일 구성 균등)')
+        if _bs['can_compute']:
+            _obs.append(f'업데이트 영향권 제외 기저 수준: ${_bs["mean"]:,.0f}/일 ({_bs["day_count"]}일 샘플)')
+        if _ds['can_compare']:
+            _obs.append(f'DAU 초반→후반 {_ds["change_pct"]:+.1f}%')
+        _n_p = sum(1 for _r in _pers if _r['has_data'])
+        _obs.append(f'반응 지속성 계산 가능 업데이트: {_n_p}/{len(_pers)}건')
+        for _item in _obs:
+            st.markdown(f'- {_item}')
+
+        st.markdown('**가능한 사업적 해석**')
+        _interps = ['아래 해석은 관측된 수치에서 도출한 가능성이며 인과 관계가 아닙니다.']
+        if _ts['can_compare'] and _ts['change_pct'] < -15 and _ds['can_compare'] and _ds['change_pct'] < -15:
+            _interps.append('매출·DAU가 모두 감소 방향이므로, 이용자 수 감소가 매출 감소의 주요 경로 중 하나일 가능성이 있습니다.')
+            _interps.append('신규 게임 출시 직후 자연 하락인지 구조적 감소인지는 더 긴 비교 기간과 외부 비교군 없이는 판별하기 어렵습니다.')
+        elif _ts['can_compare'] and _ts['change_pct'] < -15:
+            _interps.append('DAU 대비 매출 하락폭이 크다면 이용자 1인당 구매 감소 가능성이 있으나 별도 확인이 필요합니다.')
+        for _item in _interps:
+            st.markdown(f'- {_item}')
+
+        st.markdown('**추가 확인 필요 사항**')
+        for _item in [
+            '비교 기간 외 장기 추세 — 현재 관측 기간만으로 구조적 감소/증가를 단정할 수 없습니다.',
+            '동일 장르 타 게임과의 비교 — 시장 전체 추세와 개별 게임 추세를 구분해야 합니다.',
+            '이용자 1인당 매출 변화 — 이용자 수 감소와 구매율 감소를 분리하려면 별도 집계가 필요합니다.',
+            '코호트별 잔존율·복귀율 — 신규·복귀·기존 이용자 비중 변화가 매출 구조에 영향을 미칩니다.',
+        ]:
+            st.markdown(f'- {_item}')
+        st.caption('※ Python으로 계산한 수치를 기반으로 자동 생성됩니다. AI 연동 없음.')
