@@ -30,8 +30,9 @@ def render(env):
     warns = [r for r in ui.data_checks(p, data, ctx, env.window)
              if r['수준'] == '경고' and _critical(r)]
     if warns:
-        st.warning('**데이터 경고** — 분석 신뢰성에 영향이 있을 수 있습니다.\n\n' +
-                   '\n'.join(f'- **{r["대상"]}**: {r["내용"]}' for r in warns))
+        with st.expander('데이터 품질 상세', expanded=False):
+            st.warning('**데이터 경고** — 분석 신뢰성에 영향이 있을 수 있습니다.\n\n' +
+                       '\n'.join(f'- **{r["대상"]}**: {r["내용"]}' for r in warns))
 
     st.markdown('#### 국가별 데이터 보유 현황')
     names = sorted(set(ctx.rev.columns) | set(ctx.dau.columns), key=lambda c: (c == '기타', c))
