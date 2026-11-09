@@ -1,11 +1,10 @@
-"""국가별 — 국가 1개를 골라 업데이트별 (전주 vs 업데이트 주)을 봅니다."""
+"""국가별 — 국가 1개를 골라 업데이트 주기별 성과를 봅니다."""
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 import analysis as an
 import charts
-import report
 import ui
 from ui import fp
 
@@ -19,46 +18,95 @@ def _tag(ctx, c):
 
 
 def render(env):
-    ctx, n, ups = env.ctx, env.window, env.project.updates
-    cur_l, prev_l = report.cal_period_labels()
-    d_upd = env.upd['date']
+    ctx, ups = env.ctx, env.project.updates
+    rev_cycles = env.rev_cycles
+    dau_cycles = env.dau_cycles
+    pre_range = env.pre_period  # {'d_start','d_end',...} or None — 날짜 범위를 국가별 계산에 재사용
 
-    def _available(c):
-        if c in ctx.common:
-            return True
-        if c in ctx.dau.columns and c not in ctx.rev.columns:
-            return an.week_compare_cal(ctx.dau[c], d_upd) is not None
-        if c in ctx.rev.columns and c not in ctx.dau.columns:
-            return an.week_compare_cal(ctx.rev[c], d_upd) is not None
-        return True
-
-    avail_countries = [c for c in ctx.display_countries if _available(c)]
+    avail_countries = ctx.display_countries
     country = st.selectbox('국가', avail_countries, format_func=lambda c: _tag(ctx, c), key='country_sel')
     st.caption('매출만 있거나 DAU만 있는 국가는 있는 지표만 표시합니다. "기타"는 개별 국가가 아니라 제외합니다. 소규모 국가는 변동이 커서 증감률만으로 비교하지 않습니다. 국가별 DAU는 원본 수치 그대로이며, 합산하지 않은 국가 단독 값입니다.')
-    for key, df, lab, unit in (('rev', ctx.rev, '매출', '합계'), ('dau', ctx.dau, 'DAU', '일평균')):
-        if country not in df:
-            st.warning(f'{country}은(는) {"매출" if key == "rev" else "DAU"} 파일에 없어 해당 지표는 분석 불가입니다.')
-            continue
-        ser = df[country]
+    st.caption('비교 기준: 업데이트 주기(D0~다음D0-1) 기준 · 직전 주기 대비 · 변화율은 일평균 매출 기준')
+
+    # ── 매출 ──
+    if country not in ctx.rev:
+        st.warning(f'{country}은(는) 매출 파일에 없어 매출 분석 불가입니다.')
+    else:
+        ccs = an.cycle_compare_country(ctx.rev[country], rev_cycles, pre_range)
         rows, labs, prevs, curs = [], [], [], []
-        for u in ups:
-            w = an.week_compare_cal(ser, u['date'])
-            mult = (ui.KRW_RATE / 1e8) if key == 'rev' else (1 / 7)
-            labs.append(u['date'][5:])
-            prevs.append(w['prev_sum'] * mult if w else None)
-            curs.append(w['cur_sum'] * mult if w else None)
-            rows.append({'업데이트': u['date'],
-                         f'{prev_l} {unit}': (ui.fmt_krw(w['prev_sum']) if key == 'rev' else f"{w['prev_sum'] * mult:,.0f}명") if w else '분석 불가',
-                         f'{cur_l} {unit}': (ui.fmt_krw(w['cur_sum']) if key == 'rev' else f"{w['cur_sum'] * mult:,.0f}명") if w else '분석 불가',
-                         '증감액': (ui.fmt_krw_delta(w['cur_sum'] - w['prev_sum']) if key == 'rev' else f"{(w['cur_sum'] - w['prev_sum']) * mult:+,.0f}명") if w else '분석 불가',
-                         '증감률': fp(w['pct']) if w else '분석 불가'})
-        with st.container(key=f'card_ctry_{key}'):
-            ui.card_title(f'{country} · {lab}', f'{cur_l} {unit} vs {prev_l} {unit} · {"원화 환산 (1 USD = 1,350원)" if key == "rev" else "원본 단위"}')
+        for cc in ccs:
+            star = '*' if not cc['complete'] else ''
+            labs.append(cc['date'][5:] + star)
+            curs.append(cc['daily_avg'] * ui.KRW_RATE / 1e8 if cc['daily_avg'] is not None else None)
+            prevs.append(cc['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cc['prev_daily_avg'] is not None else None)
+            if cc['can_compare']:
+                change_str = f"{cc['change_pct']:+.1f}%"
+                delta_str = ui.fmt_krw_delta(cc['daily_avg'] - cc['prev_daily_avg'])
+            elif not cc['complete']:
+                change_str = '비교 불가 — 주기 미완료'
+                delta_str = '-'
+            else:
+                change_str = '비교 기준 없음'
+                delta_str = '-'
+            rows.append({
+                '날짜': cc['date'],
+                '기간': f"{cc['d_start'][5:]}~{cc['d_end'][5:]}",
+                '일수': f"{cc['valid_days']}/{cc['days']}일",
+                '직전주기 합계': ui.fmt_krw(cc['prev_total']),
+                '직전주기 일평균': ui.fmt_krw(cc['prev_daily_avg']),
+                '이번주기 합계': ui.fmt_krw(cc['total']),
+                '이번주기 일평균': ui.fmt_krw(cc['daily_avg']),
+                '일평균 증감액': delta_str,
+                '일평균 증감률': change_str,
+            })
+        with st.container(key='card_ctry_rev'):
+            ui.card_title(f'{country} · 매출',
+                          '업데이트 주기별 · 직전 주기 대비 일평균 증감률 · 원화 환산 (1 USD = 1,350원)')
             c1, c2 = st.columns([1.2, 1])
             with c1:
-                ui.show(charts.fig_group_bars(labs, prevs, curs, prev_l, cur_l, charts.BLUE if key == 'rev' else charts.GREEN, unit='억원' if key == 'rev' else '명'))
+                ui.show(charts.fig_group_bars(labs, prevs, curs,
+                                              '직전 주기 일평균', '이번 주기 일평균', charts.BLUE, unit='억원'))
             with c2:
                 ui.table(pd.DataFrame(rows))
+
+    # ── DAU ──
+    if country not in ctx.dau:
+        st.warning(f'{country}은(는) DAU 파일에 없어 DAU 분석 불가입니다.')
+    else:
+        ccs_d = an.cycle_compare_country(ctx.dau[country], dau_cycles, pre_range)
+        rows_d, labs_d, prevs_d, curs_d = [], [], [], []
+        for cc in ccs_d:
+            star = '*' if not cc['complete'] else ''
+            labs_d.append(cc['date'][5:] + star)
+            curs_d.append(cc['daily_avg'])
+            prevs_d.append(cc['prev_daily_avg'])
+            if cc['can_compare']:
+                change_str = f"{cc['change_pct']:+.1f}%"
+                delta = cc['daily_avg'] - cc['prev_daily_avg']
+                delta_str = f"{delta:+,.0f}명"
+            elif not cc['complete']:
+                change_str = '비교 불가 — 주기 미완료'
+                delta_str = '-'
+            else:
+                change_str = '비교 기준 없음'
+                delta_str = '-'
+            rows_d.append({
+                '날짜': cc['date'],
+                '기간': f"{cc['d_start'][5:]}~{cc['d_end'][5:]}",
+                '일수': f"{cc['valid_days']}/{cc['days']}일",
+                '직전주기 일평균 DAU': ui.fmt_dau(cc['prev_daily_avg']),
+                '이번주기 일평균 DAU': ui.fmt_dau(cc['daily_avg']),
+                '증감 인원': delta_str,
+                '증감률': change_str,
+            })
+        with st.container(key='card_ctry_dau'):
+            ui.card_title(f'{country} · DAU', '업데이트 주기별 일평균 DAU · 직전 주기 대비')
+            c1, c2 = st.columns([1.2, 1])
+            with c1:
+                ui.show(charts.fig_group_bars(labs_d, prevs_d, curs_d,
+                                              '직전 주기 일평균', '이번 주기 일평균', charts.GREEN))
+            with c2:
+                ui.table(pd.DataFrame(rows_d))
 
     with st.expander('일별 추이 (전체 기간)'):
         t1, t2 = st.columns(2)

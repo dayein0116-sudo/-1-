@@ -49,7 +49,9 @@ def render(env):
     cycles = env.rev_cycles
     pre_period = env.pre_period
 
-    rows, curs, prevs, labels = [], [], [], []
+    rows, labels = [], []
+    curs_avg, prevs_avg = [], []   # 일평균 모드
+    curs_total, prevs_total = [], []  # 합계 모드
     asterisk_notes = []
     for i, cy in enumerate(cycles):
         needs_asterisk = not cy['complete']
@@ -67,18 +69,21 @@ def render(env):
         if i == 0 and pre_period and cy['daily_avg']:
             pct = (cy['daily_avg'] / pre_period['daily_avg'] - 1) * 100
             change_str = f"{pct:+.1f}% (초기 운영 기간 대비)"
-            prev_bar = pre_period['daily_avg'] * ui.KRW_RATE / 1e8
+            prev_avg_bar = pre_period['daily_avg'] * ui.KRW_RATE / 1e8
+            prev_total_bar = pre_period.get('total', None)
+            prev_total_bar = prev_total_bar * ui.KRW_RATE / 1e8 if prev_total_bar else None
         elif cy['can_compare'] and cy['change_pct'] is not None:
             change_str = f"{cy['change_pct']:+.1f}%"
-            prev_bar = cy['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cy.get('prev_daily_avg') else None
+            prev_avg_bar = cy['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cy.get('prev_daily_avg') else None
+            prev_total_bar = cycles[i - 1]['total'] * ui.KRW_RATE / 1e8 if cycles[i - 1].get('total') else None
         elif not cy['complete']:
-            # 주기 자체가 미완료 (진행 중 또는 부분 집계)
             change_str = '비교 불가 — 주기 미완료'
-            prev_bar = cy['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cy.get('prev_daily_avg') else None
+            prev_avg_bar = cy['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cy.get('prev_daily_avg') else None
+            prev_total_bar = cycles[i - 1]['total'] * ui.KRW_RATE / 1e8 if i > 0 and cycles[i - 1].get('total') else None
         else:
-            # 주기는 완료됐지만 비교할 직전 주기가 없거나 직전 주기가 미완료
             change_str = '비교 기준 없음 (첫 주기)'
-            prev_bar = None
+            prev_avg_bar = None
+            prev_total_bar = None
 
         rows.append({
             '날짜': cy['date'],
@@ -90,10 +95,11 @@ def render(env):
             '직전 주기 대비': change_str,
             '상태': status,
         })
-        # 차트 라벨에도 별표 적용
         labels.append(cy['date'][5:] + star)
-        curs.append(cy['daily_avg'] * ui.KRW_RATE / 1e8 if cy['daily_avg'] else None)
-        prevs.append(prev_bar)
+        curs_avg.append(cy['daily_avg'] * ui.KRW_RATE / 1e8 if cy['daily_avg'] else None)
+        prevs_avg.append(prev_avg_bar)
+        curs_total.append(cy['total'] * ui.KRW_RATE / 1e8 if cy['total'] else None)
+        prevs_total.append(prev_total_bar)
 
         note = _asterisk_note(cy, cutoff_reason)
         if note:
@@ -107,7 +113,15 @@ def render(env):
         st.caption('변화율 기준: 업데이트 주기마다 기간이 다를 수 있어, 이전 주기와의 변화율은 하루 평균 매출을 기준으로 계산합니다.')
         st.caption(f'집계 일수: 데이터가 있는 일수 / 전체 기간  ·  분석 범위: {scope_txt}  ·  원화 환산: 1달러 = 1,350원')
         ui.table(pd.DataFrame(rows))
-        ui.show(charts.fig_group_bars(labels, prevs, curs, '직전 주기 일평균', '이번 주기 일평균', charts.BLUE, unit='억원'))
+        rev_mode = st.radio('그래프 기준', ['주기 합계', '일평균'], horizontal=True, key='cmp_rev_mode',
+                            help='주기 합계: 업데이트 주기 전체 매출 (기간이 다른 주기끼리는 직접 크기 비교 주의) · 일평균: 하루 평균 매출 (주기 길이에 관계없이 비교 가능)')
+        if rev_mode == '주기 합계':
+            ui.show(charts.fig_group_bars(labels, prevs_total, curs_total,
+                                          '직전 주기 합계', '이번 주기 합계', charts.BLUE, unit='억원'))
+            st.caption('주기 합계는 주기 길이가 다를 때 단순 비교하지 마세요. 변화율 계산은 항상 일평균 기준입니다.')
+        else:
+            ui.show(charts.fig_group_bars(labels, prevs_avg, curs_avg,
+                                          '직전 주기 일평균', '이번 주기 일평균', charts.BLUE, unit='억원'))
         # 별표 각주
         if asterisk_notes:
             for note in asterisk_notes:
@@ -186,28 +200,33 @@ def render(env):
                 f'CSV 데이터 범위 밖이라 비교 불가입니다.'
             )
 
-    # ── 국가별 추정 매출 (달력 주 기준 — 기존 유지) ──
+    # ── 국가별 추정 매출 (업데이트 주기 기준) ──
     with st.container(key='card_cmp_country'):
         ui.card_title(
             '국가별 매출',
-            '업데이트 주 금액(원화 환산) 및 증감률 · 달력 주(월~일) 기준 — 증감률만으로 판단하지 말고 규모를 함께 보세요'
+            '업데이트 주기별 일평균 매출 (원화 환산) 및 증감률 · 직전 주기 대비 · 증감률만으로 판단하지 말고 규모를 함께 보세요'
         )
-        dates = [u['date'][5:] for u in ups]
+        # 주기 라벨 (미완료 별표)
+        dates_lbl = [cy['date'][5:] + ('*' if not cy['complete'] else '') for cy in cycles]
         mi_cols = pd.MultiIndex.from_tuples(
-            [('국가', '')] + [(d, s) for d in dates for s in ['금액', '증감률']]
+            [('국가', '')] + [(d, s) for d in dates_lbl for s in ['일평균', '증감률']]
         )
-        # ctx.rev는 이미 cutoff 적용 — 별도 필터링 불필요
-        complete_countries = [
-            c for c in ctx.rev_countries
-            if all(an.week_compare_cal(ctx.rev[c], u['date']) is not None for u in ups)
-        ]
+        # 기타 제외, ctx.rev는 이미 cutoff 적용
+        comp_countries = [c for c in ctx.rev_countries if c != '기타']
         data = []
-        for c in complete_countries:
+        for c in comp_countries:
+            ccs = an.cycle_compare_country(ctx.rev[c], cycles, pre_period)
+            if all(cc['total'] is None for cc in ccs):
+                continue
             row_data = [c + ('' if c in ctx.dau_countries else ' (매출만)')]
-            for u in ups:
-                w = an.week_compare_cal(ctx.rev[c], u['date'])
-                row_data.append(ui.fmt_krw(w['cur_sum']))
-                row_data.append(f"{w['pct']:+.1f}%" if w['pct'] is not None else '-')
+            for cc in ccs:
+                row_data.append(ui.fmt_krw(cc['daily_avg']))
+                if cc['can_compare']:
+                    row_data.append(f"{cc['change_pct']:+.1f}%")
+                elif not cc['complete']:
+                    row_data.append('미완료')
+                else:
+                    row_data.append('-')
             data.append(row_data)
 
         if not data:
@@ -224,9 +243,9 @@ def render(env):
                 except (ValueError, AttributeError):
                     return ''
 
-            pct_cols = [(d, '증감률') for d in dates]
+            pct_cols = [(d, '증감률') for d in dates_lbl]
             st.dataframe(df_c.style.map(_style_pct, subset=pct_cols), use_container_width=True)
-        st.caption('소규모 국가는 일 규모가 작아 증감률의 변동이 큽니다.')
+        st.caption('소규모 국가는 일 규모가 작아 증감률의 변동이 큽니다. 변화율은 일평균 매출 기준. * 미완료 주기.')
 
     # ── 달력 주(월~일) 기준 비교 — 보조 참고용 ──
     with st.expander('달력 주(월~일) 기준 비교 — 보조 참고용', expanded=False):

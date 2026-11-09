@@ -819,3 +819,257 @@ def test_fmt_krw_delta_cookierun_1008():
     """fmt_krw_delta: 부호 포함 억 단위 반올림."""
     assert _ui.fmt_krw_delta(1_105_140.39) == '+14.9억 원'
     assert _ui.fmt_krw_delta(-1_105_140.39) == '-14.9억 원'
+
+
+# ── 16. cycle_compare_country ─────────────────────────────────────────────────
+
+def test_cycle_compare_country_structure(rev, rev_total):
+    """국가별 사이클 수, 날짜 경계가 마스터 cycles와 일치."""
+    cycles = an.cycle_compare(rev_total, UPDS)
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles)
+    assert len(ccs) == len(cycles)
+    for cc, cy in zip(ccs, cycles):
+        assert cc['date'] == cy['date']
+        assert cc['d_start'] == cy['d_start']
+        assert cc['d_end'] == cy['d_end']
+        assert cc['complete'] == cy['complete']
+
+
+def test_cycle_compare_country_no_pre_period(rev, rev_total):
+    """pre_period_range 없으면 첫 주기: prev_daily_avg=None, can_compare=False."""
+    cycles = an.cycle_compare(rev_total, UPDS)
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles, pre_period_range=None)
+    assert ccs[0]['prev_daily_avg'] is None
+    assert ccs[0]['prev_total'] is None
+    assert not ccs[0]['can_compare']
+    assert ccs[0]['change_pct'] is None
+
+
+def test_cycle_compare_country_with_pre_period(rev, rev_total):
+    """pre_period_range 제공 시 첫 주기: prev_daily_avg > 0, can_compare=True."""
+    cycles = an.cycle_compare(rev_total, UPDS)
+    pre_range = {'d_start': '2026-07-30', 'd_end': '2026-08-12'}  # 첫 주기(14일) 직전 14일
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles, pre_period_range=pre_range)
+    assert ccs[0]['prev_daily_avg'] is not None and ccs[0]['prev_daily_avg'] > 0
+    assert ccs[0]['prev_total'] is not None
+    assert ccs[0]['can_compare']
+    assert ccs[0]['change_pct'] is not None
+
+
+def test_cycle_compare_country_mid_cycle_prev_link(rev, rev_total):
+    """두 번째 주기의 prev_daily_avg = 첫 주기 daily_avg."""
+    cycles = an.cycle_compare(rev_total, UPDS)
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles)
+    assert ccs[1]['prev_daily_avg'] == pytest.approx(ccs[0]['daily_avg'], abs=0.01)
+
+
+def test_cycle_compare_country_incomplete_no_compare(rev, rev_total):
+    """미완료 주기(10/22): can_compare=False, change_pct=None."""
+    cycles = an.cycle_compare(rev_total, UPDS, cutoff_date='2026-10-27')
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles)
+    last = next(cc for cc in ccs if cc['date'] == '2026-10-22')
+    assert not last['complete']
+    assert not last['can_compare']
+    assert last['change_pct'] is None
+
+
+def test_cycle_compare_country_all_nan_returns_none(rev_total):
+    """국가 데이터 전체 NaN: total=None, daily_avg=None."""
+    cycles = an.cycle_compare(rev_total, UPDS)
+    empty_ser = pd.Series(dtype=float, index=cycles[0:1])  # empty-ish
+    # 빈 Series로 테스트 — 모든 슬라이스 결과 valid_days=0
+    empty = pd.Series(float('nan'), index=pd.date_range('2026-07-29', '2026-10-27'))
+    ccs = an.cycle_compare_country(empty, cycles)
+    for cc in ccs:
+        assert cc['total'] is None
+        assert cc['daily_avg'] is None
+        assert not cc['can_compare']
+
+
+def test_cycle_compare_country_cookierun_kr_first_cycle(rev, rev_total):
+    """쿠키런 대한민국 첫 주기(8/13~8/26): daily_avg > 0 and consistent with period sum."""
+    cycles = an.cycle_compare(rev_total, UPDS)
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles)
+    first = ccs[0]
+    assert first['date'] == '2026-08-13'
+    assert first['valid_days'] == 14
+    assert first['total'] is not None and first['total'] > 0
+    assert first['daily_avg'] == pytest.approx(first['total'] / 14, abs=0.01)
+
+
+# ── 17. cycle_compare_country — 원본 CSV 독립 재계산 (Section 3 요건) ─────────
+
+def test_cycle_compare_country_cookierun_kr_indep(rev, rev_total):
+    """쿠키런 대한민국 — 원본 CSV 직접 슬라이스와 함수 출력 100% 일치.
+    검증 기준: 독립 계산값(슬라이스 sum/mean)으로 함수 출력 검증.
+    기존 함수 출력을 그대로 기대값으로 사용하지 않음."""
+    cycles = an.cycle_compare(rev_total, UPDS, cutoff_date='2026-10-27')
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles)
+    cutoff = pd.Timestamp('2026-10-27')
+    for cc in ccs:
+        d_start = pd.Timestamp(cc['d_start'])
+        d_end = min(pd.Timestamp(cc['d_end']), cutoff)
+        # 원본 CSV 직접 슬라이싱
+        slc = rev['대한민국'][(rev['대한민국'].index >= d_start)
+                                               & (rev['대한민국'].index <= d_end)].dropna()
+        indep_total = float(slc.sum()) if len(slc) > 0 else None
+        indep_avg = indep_total / len(slc) if indep_total and len(slc) > 0 else None
+        # 함수 출력 비교
+        assert cc['valid_days'] == len(slc), f"{cc['date']}: valid_days mismatch"
+        if indep_total is not None:
+            assert cc['total'] == pytest.approx(indep_total, abs=0.01), f"{cc['date']}: total mismatch"
+        if indep_avg is not None:
+            assert cc['daily_avg'] == pytest.approx(indep_avg, abs=0.01), f"{cc['date']}: daily_avg mismatch"
+
+
+def test_cycle_compare_country_maple_kr_indep(maple_rev_total):
+    """메이플 대한민국 — 원본 CSV 독립 재계산. 19일(9/3)과 23일(9/22) 주기 포함."""
+    maple_rev_df = an.read_csv(MAPLE_DATA / 'revenue.csv')
+    cycles = an.cycle_compare(maple_rev_total, MAPLE_UPDS,
+                               cutoff_date='2026-10-27', next_update_date='2026-11-05')
+    ccs = an.cycle_compare_country(maple_rev_df['대한민국'], cycles)
+    cutoff = pd.Timestamp('2026-10-27')
+    for cc in ccs:
+        d_start = pd.Timestamp(cc['d_start'])
+        d_end = min(pd.Timestamp(cc['d_end']), cutoff)
+        slc = maple_rev_df['대한민국'][
+            (maple_rev_df['대한민국'].index >= d_start)
+            & (maple_rev_df['대한민국'].index <= d_end)
+        ].dropna()
+        indep_avg = float(slc.mean()) if len(slc) > 0 else None
+        assert cc['valid_days'] == len(slc), f"{cc['date']}: valid_days mismatch"
+        if indep_avg is not None:
+            assert cc['daily_avg'] == pytest.approx(indep_avg, abs=0.01), f"{cc['date']}: daily_avg"
+        # 미완료 주기: can_compare=False
+        if not cc['complete']:
+            assert not cc['can_compare'] and cc['change_pct'] is None, f"{cc['date']}: incomplete should not compare"
+
+
+def test_cycle_compare_country_different_period_lengths(maple_rev_total):
+    """9/3(19일)과 9/22(23일) 주기: 일평균 기준 비교, 합계 혼동 없음."""
+    maple_rev_df = an.read_csv(MAPLE_DATA / 'revenue.csv')
+    cycles = an.cycle_compare(maple_rev_total, MAPLE_UPDS, cutoff_date='2026-10-27')
+    ccs = an.cycle_compare_country(maple_rev_df['대한민국'], cycles)
+    c903 = next(cc for cc in ccs if cc['date'] == '2026-09-03')
+    c922 = next(cc for cc in ccs if cc['date'] == '2026-09-22')
+    # 9/3: 19일, 9/22: 23일
+    assert c903['days'] == 19
+    assert c922['days'] == 23
+    # 9/22의 prev는 9/3의 daily_avg (일평균 기준)
+    assert c922['prev_daily_avg'] == pytest.approx(c903['daily_avg'], abs=0.01)
+    # 9/22의 change_pct는 total 비율이 아닌 daily_avg 비율
+    expected_pct = (c922['daily_avg'] / c903['daily_avg'] - 1) * 100
+    assert c922['change_pct'] == pytest.approx(expected_pct, abs=0.01)
+
+
+def test_cycle_compare_country_cookierun_1022_incomplete(rev, rev_total):
+    """쿠키런 10/22 미완료 6일: 합계·일평균 표시 가능, 증감률 차단."""
+    cycles = an.cycle_compare(rev_total, UPDS, cutoff_date='2026-10-27')
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles)
+    last = next(cc for cc in ccs if cc['date'] == '2026-10-22')
+    assert last['valid_days'] == 6
+    assert last['total'] is not None      # 합계 표시 가능
+    assert last['daily_avg'] is not None  # 일평균 표시 가능
+    assert not last['complete']
+    assert not last['can_compare']
+    assert last['change_pct'] is None     # 확정 증감률 차단
+
+
+def test_cycle_compare_country_maple_1015_incomplete(maple_rev_total):
+    """메이플 10/15 미완료 13일: 합계·일평균 표시 가능, 증감률 차단."""
+    maple_rev_df = an.read_csv(MAPLE_DATA / 'revenue.csv')
+    cycles = an.cycle_compare(maple_rev_total, MAPLE_UPDS,
+                               cutoff_date='2026-10-27', next_update_date='2026-11-05')
+    ccs = an.cycle_compare_country(maple_rev_df['대한민국'], cycles)
+    last = next(cc for cc in ccs if cc['date'] == '2026-10-15')
+    assert last['valid_days'] == 13
+    assert last['total'] is not None
+    assert last['daily_avg'] is not None
+    assert not last['complete']
+    assert last['change_pct'] is None
+
+
+def test_cycle_compare_country_cookierun_kr_known_values(rev, rev_total):
+    """쿠키런 대한민국 주요 주기 수치 고정값 검증 (원본 CSV 독립 재계산 결과).
+    8/13: $170,604/일, 8/27: $141,511/일(-17.1%), 10/22: 미완료 6일."""
+    cycles = an.cycle_compare(rev_total, UPDS, cutoff_date='2026-10-27')
+    pre_range = {'d_start': '2026-07-30', 'd_end': '2026-08-12'}
+    ccs = an.cycle_compare_country(rev['대한민국'], cycles, pre_range)
+    by_date = {cc['date']: cc for cc in ccs}
+    assert by_date['2026-08-13']['daily_avg'] == pytest.approx(170603.61, abs=1.0)
+    assert by_date['2026-08-27']['daily_avg'] == pytest.approx(141510.84, abs=1.0)
+    assert by_date['2026-08-27']['change_pct'] == pytest.approx(-17.05, abs=0.1)
+    assert by_date['2026-10-22']['valid_days'] == 6
+    assert by_date['2026-10-22']['change_pct'] is None
+
+
+def test_cycle_compare_country_maple_kr_known_values(maple_rev_total):
+    """메이플 대한민국 주요 주기 수치 고정값 검증.
+    7/2: $175,637/일, 9/3: $330,457/일, 9/22: $229,580/일(-30.5%)."""
+    maple_rev_df = an.read_csv(MAPLE_DATA / 'revenue.csv')
+    cycles = an.cycle_compare(maple_rev_total, MAPLE_UPDS,
+                               cutoff_date='2026-10-27', next_update_date='2026-11-05')
+    ccs = an.cycle_compare_country(maple_rev_df['대한민국'], cycles)
+    by_date = {cc['date']: cc for cc in ccs}
+    assert by_date['2026-07-02']['daily_avg'] == pytest.approx(175637.49, abs=1.0)
+    assert by_date['2026-09-03']['daily_avg'] == pytest.approx(330457.20, abs=1.0)
+    assert by_date['2026-09-22']['daily_avg'] == pytest.approx(229580.07, abs=1.0)
+    assert by_date['2026-09-22']['change_pct'] == pytest.approx(-30.53, abs=0.1)
+    assert by_date['2026-10-15']['change_pct'] is None  # 미완료
+
+
+# ── 18. revenue_trend_stats — 날짜 경계·관측일수·변화율 불변 ─────────────────
+
+def test_revenue_trend_stats_date_boundaries(rev_total):
+    """first_start=인덱스[0], last_end=인덱스[-1] — 시작·종료 구간이 실제 데이터 경계에서 계산됨."""
+    r = an.revenue_trend_stats(rev_total, [])
+    assert r['can_compare']
+    assert r['first_start'] == rev_total.index[0]
+    assert r['last_end'] == rev_total.index[-1]
+    # 시작 구간 끝 < 종료 구간 시작 (두 구간 사이에 최소 7일 여유)
+    assert r['first_end'] < r['last_start']
+
+
+def test_revenue_trend_stats_valid_days_returned(rev_total):
+    """first_valid_days / last_valid_days 반환 — NaN 없는 경우 h와 동일."""
+    r = an.revenue_trend_stats(rev_total, [])
+    h = r['half_days']
+    assert r['first_valid_days'] == h  # 쿠키런 데이터 — 첫 h일 결측 없음
+    assert r['last_valid_days'] == h
+
+
+def test_revenue_trend_stats_valid_days_with_nan():
+    """구간 내 NaN이 있으면 valid_days < half_days."""
+    idx = pd.date_range('2026-01-01', periods=50)
+    s = pd.Series(100.0, index=idx)
+    s.iloc[3] = float('nan')   # 시작 구간에 NaN 1개
+    s.iloc[-5] = float('nan')  # 종료 구간에 NaN 1개
+    r = an.revenue_trend_stats(s, [])
+    h = r['half_days']  # min(21, (50-7)//2=21) = 21
+    assert r['first_valid_days'] == h - 1
+    assert r['last_valid_days'] == h - 1
+    # change_pct 계산은 NaN을 건너뛴 평균으로 수행
+    assert r['can_compare']
+
+
+def test_revenue_trend_stats_half_days_capped():
+    """데이터가 짧으면 half_days는 21에서 h=min(21,(n-7)//2)로 축소."""
+    # n=35 → h = min(21,(35-7)//2=14) = 14
+    s35 = pd.Series(100.0, index=pd.date_range('2026-01-01', periods=35))
+    r = an.revenue_trend_stats(s35, [])
+    assert r['can_compare']
+    assert r['half_days'] == 14
+    assert r['first_start'] == s35.index[0]
+    assert r['last_end'] == s35.index[-1]
+
+
+def test_revenue_trend_stats_change_pct_invariant(rev_total):
+    """데이터가 더 길어져도 첫/마지막 21일 mean은 변하지 않는다 (슬라이스 기반)."""
+    r = an.revenue_trend_stats(rev_total, [])
+    h = r['half_days']
+    expected_first = float(rev_total.iloc[:h].mean())
+    expected_last = float(rev_total.iloc[-h:].mean())
+    assert r['first_mean'] == pytest.approx(expected_first, abs=1e-6)
+    assert r['last_mean'] == pytest.approx(expected_last, abs=1e-6)
+    expected_pct = (expected_last / expected_first - 1) * 100
+    assert r['change_pct'] == pytest.approx(expected_pct, abs=1e-6)
