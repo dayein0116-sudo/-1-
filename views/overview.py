@@ -100,19 +100,28 @@ def render(env):
                         legend=dict(orientation='h', yanchor='top', y=-0.25, x=0.5, xanchor='center'))
     st.plotly_chart(ui.mark_updates(_fig, p.updates), width='stretch', config={'displayModeBar': False})
     if _ts['can_compare']:
+        _fv = _ts.get('first_valid_days', _h)
+        _lv = _ts.get('last_valid_days', _h)
+        _fd = f'{_fv}/{_h}일' if _fv < _h else f'{_h}일'
+        _ld = f'{_lv}/{_h}일' if _lv < _h else f'{_h}일'
         st.markdown(
-            f'초반 **{_h}일** ({_ts["first_start"]:%m/%d}–{_ts["first_end"]:%m/%d}) 일평균 **\\${_ts["first_mean"]:,.0f}** · '
-            f'후반 **{_h}일** ({_ts["last_start"]:%m/%d}–{_ts["last_end"]:%m/%d}) 일평균 **\\${_ts["last_mean"]:,.0f}** '
+            f'시작 구간 **{_fd}** ({_ts["first_start"]:%m/%d}–{_ts["first_end"]:%m/%d}) 일평균 **{ui.fmt_krw(_ts["first_mean"])}** · '
+            f'종료 구간 **{_ld}** ({_ts["last_start"]:%m/%d}–{_ts["last_end"]:%m/%d}) 일평균 **{ui.fmt_krw(_ts["last_mean"])}** '
             f'({_ts["change_pct"]:+.1f}%)'
         )
-    st.caption(f'※ 7일 이동평균은 추세 시각화용이며 단독으로 원인을 판정하지 않습니다. 초반·후반은 각 {_h}일({_h // 7}주)로 요일 구성이 같습니다.')
+    st.caption(
+        f'※ 7일 이동평균은 추세 시각화용이며 단독으로 원인을 판정하지 않습니다.'
+        + (f' 시작·종료 구간은 각 {_h}일({_h // 7}주)로 요일 구성이 같습니다.'
+           f' 확보한 데이터의 첫 {_h}일과 마지막 {_h}일을 비교하며, 게임 출시 초기와 현재 시점을 비교하는 분석이 아닙니다.'
+           if _ts['can_compare'] else '')
+    )
 
     # A-2: 업데이트 기간을 제외한 평소 매출 수준
     st.markdown('**업데이트 기간을 제외한 평소 매출 수준**')
     if _bs['can_compute']:
         st.markdown(
             f'각 업데이트 D-2–D+6 제외 후 비연속적으로 남은 **{_bs["day_count"]}일** · '
-            f'일평균 **\\${_bs["mean"]:,.0f}** '
+            f'일평균 **{ui.fmt_krw(_bs["mean"])}** '
             f'({_bs["date_min"]:%m/%d}–{_bs["date_max"]:%m/%d} 범위에 분포)'
         )
     else:
@@ -139,7 +148,7 @@ def render(env):
         _rev_dir = '감소' if _ts['change_pct'] < -5 else ('증가' if _ts['change_pct'] > 5 else '보합')
         _dau_dir = '감소' if _ds['change_pct'] < -5 else ('증가' if _ds['change_pct'] > 5 else '보합')
         st.markdown(
-            f'초반→후반 {_h}일: 매출 {_ts["change_pct"]:+.1f}% (**{_rev_dir}**) · DAU {_ds["change_pct"]:+.1f}% (**{_dau_dir}**)'
+            f'시작·종료 구간 비교: 매출 {_ts["change_pct"]:+.1f}% (**{_rev_dir}**) · DAU {_ds["change_pct"]:+.1f}% (**{_dau_dir}**)'
         )
         if _rev_dir == _dau_dir:
             st.caption('매출과 DAU가 같은 방향으로 변화했습니다. 이용자 수 변화가 매출 변화와 연동되어 있을 가능성이 있으나, 1인당 매출 기여는 별도 확인이 필요합니다.')
@@ -149,16 +158,16 @@ def render(env):
         st.caption('데이터 기간이 짧아 비교 불가')
 
     # A-5: 공통 국가별 매출 변화
-    st.markdown(f'**공통 국가별 매출 변화** ({len(ctx.common)}개국 · 초반 vs 후반 각 {_h}일 평균)')
+    st.markdown(f'**공통 국가별 매출 변화** ({len(ctx.common)}개국 · 시작 구간 vs 종료 구간 각 {_h}일 평균)')
     if _cc:
         _crows = []
         for _c, _cr in _cc.items():
             if _cr['can_compare']:
-                _crows.append({'국가': _c, '초반 일평균 (USD)': f'${_cr["first_mean"]:,.0f}',
-                                '후반 일평균 (USD)': f'${_cr["last_mean"]:,.0f}',
+                _crows.append({'국가': _c, '시작 구간 일평균': ui.fmt_krw(_cr["first_mean"]),
+                                '종료 구간 일평균': ui.fmt_krw(_cr["last_mean"]),
                                 '변화율': f'{_cr["change_pct"]:+.1f}%'})
             else:
-                _crows.append({'국가': _c, '초반 일평균 (USD)': '-', '후반 일평균 (USD)': '-',
+                _crows.append({'국가': _c, '시작 구간 일평균': '-', '종료 구간 일평균': '-',
                                 '변화율': _cr.get('reason', '비교 불가')})
         ui.table(pd.DataFrame(_crows))
 
@@ -167,24 +176,24 @@ def render(env):
         st.markdown('**핵심 진단**')
         if _ts['can_compare']:
             _chg = _ts['change_pct']
-            _fm, _lm = f'${_ts["first_mean"]:,.0f}', f'${_ts["last_mean"]:,.0f}'
+            _fm, _lm = ui.fmt_krw(_ts["first_mean"]), ui.fmt_krw(_ts["last_mean"])
             if _chg < -15:
-                st.markdown(f'초반 {_h}일({_ts["first_start"]:%m/%d}~{_ts["first_end"]:%m/%d}) 일평균 {_fm} 대비 후반 {_h}일({_ts["last_start"]:%m/%d}~{_ts["last_end"]:%m/%d}) 일평균 {_lm}로 **{_chg:+.1f}%** 차이가 관측됩니다.')
+                st.markdown(f'시작 구간 {_h}일({_ts["first_start"]:%m/%d}~{_ts["first_end"]:%m/%d}) 일평균 {_fm} 대비 종료 구간 {_h}일({_ts["last_start"]:%m/%d}~{_ts["last_end"]:%m/%d}) 일평균 {_lm}로 **{_chg:+.1f}%** 차이가 관측됩니다.')
             elif _chg > 15:
-                st.markdown(f'초반 {_h}일 일평균 {_fm} 대비 후반 {_h}일 일평균 {_lm}로 **{_chg:+.1f}%** 차이가 관측됩니다.')
+                st.markdown(f'시작 구간 {_h}일 일평균 {_fm} 대비 종료 구간 {_h}일 일평균 {_lm}로 **{_chg:+.1f}%** 차이가 관측됩니다.')
             else:
-                st.markdown(f'초반·후반 {_h}일 간 뚜렷한 방향성이 확인되지 않습니다 ({_chg:+.1f}%).')
+                st.markdown(f'시작·종료 구간 {_h}일 간 뚜렷한 방향성이 확인되지 않습니다 ({_chg:+.1f}%).')
         else:
             st.markdown(_ts['reason'])
 
         st.markdown('**확인된 현상**')
         _obs = []
         if _ts['can_compare']:
-            _obs.append(f'매출 초반→후반 {_ts["change_pct"]:+.1f}% (각 {_h}일 평균 · 요일 구성 균등)')
+            _obs.append(f'매출 시작→종료 구간 {_ts["change_pct"]:+.1f}% (각 {_h}일 평균 · 요일 구성 균등)')
         if _bs['can_compute']:
-            _obs.append(f'업데이트 기간 제외 평소 매출 수준: \\${_bs["mean"]:,.0f}/일 ({_bs["day_count"]}일 샘플)')
+            _obs.append(f'업데이트 기간 제외 평소 매출 수준: {ui.fmt_krw(_bs["mean"])}/일 ({_bs["day_count"]}일 샘플)')
         if _ds['can_compare']:
-            _obs.append(f'DAU 초반→후반 {_ds["change_pct"]:+.1f}%')
+            _obs.append(f'DAU 시작→종료 구간 {_ds["change_pct"]:+.1f}%')
         _n_p = sum(1 for _r in _pers if _r['has_data'])
         _obs.append(f'반응 지속성 계산 가능 업데이트: {_n_p}/{len(_pers)}건')
         for _item in _obs:

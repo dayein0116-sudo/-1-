@@ -495,6 +495,7 @@ def revenue_trend_stats(rev_total, upd_dates, half_days=21):
         'change_pct': (lm / fm - 1) * 100 if fm > 0 else float('nan'),
         'first_start': first.index[0], 'first_end': first.index[-1],
         'last_start': last.index[0], 'last_end': last.index[-1],
+        'first_valid_days': int(first.count()), 'last_valid_days': int(last.count()),
     }
 
 
@@ -647,3 +648,59 @@ def week_compare_cal(s, date):
             'pre_days': d.dayofweek,
             'cur_peak': float(cur.max()), 'prev_peak': float(prev.max()),
             'peak_pct': (float(cur.max()) / float(prev.max()) - 1) * 100 if float(prev.max()) > 0 else None}
+
+
+def cycle_compare_country(ser, cycles, pre_period_range=None):
+    """업데이트 주기 경계를 기존 cycles에서 가져와 단일 국가 시리즈에 적용.
+
+    pre_period_range: {'d_start', 'd_end'} — 초기 기준 기간 날짜 범위.
+                      제공 시 국가별 해당 기간 집계로 첫 주기 직전 기준을 계산.
+    반환: cycles와 같은 순서의 dict 목록
+      (date, title, d_start, d_end, days, valid_days, total, daily_avg, complete,
+       prev_total, prev_daily_avg, change_pct, can_compare)
+    """
+    pre = None
+    if pre_period_range:
+        ps = pd.Timestamp(pre_period_range['d_start'])
+        pe = pd.Timestamp(pre_period_range['d_end'])
+        pre_data = ser[(ser.index >= ps) & (ser.index <= pe)].dropna()
+        if len(pre_data) > 0:
+            pre_total = float(pre_data.sum())
+            pre = {'total': pre_total, 'daily_avg': pre_total / len(pre_data)}
+
+    rows = []
+    for cy in cycles:
+        d_start = pd.Timestamp(cy['d_start'])
+        d_end = pd.Timestamp(cy['d_end'])
+        period = ser[(ser.index >= d_start) & (ser.index <= d_end)].dropna()
+        valid_days = len(period)
+        total = float(period.sum()) if valid_days > 0 else None
+        daily_avg = total / valid_days if valid_days > 0 and total is not None else None
+        rows.append({
+            'date': cy['date'], 'title': cy['title'],
+            'd_start': cy['d_start'], 'd_end': cy['d_end'],
+            'days': cy['days'], 'valid_days': valid_days,
+            'total': total, 'daily_avg': daily_avg,
+            'complete': cy['complete'], 'truncated': cy.get('truncated', False),
+        })
+
+    for i, row in enumerate(rows):
+        if i == 0:
+            prev_total = pre['total'] if pre else None
+            prev_avg = pre['daily_avg'] if pre else None
+        elif rows[i - 1]['complete']:
+            prev_total = rows[i - 1]['total']
+            prev_avg = rows[i - 1]['daily_avg']
+        else:
+            prev_total = None
+            prev_avg = None
+        can_compare = bool(
+            row['complete'] and prev_avg is not None
+            and prev_avg > 0 and row['daily_avg'] is not None
+        )
+        change_pct = (row['daily_avg'] / prev_avg - 1) * 100 if can_compare else None
+        row.update({
+            'prev_total': prev_total, 'prev_daily_avg': prev_avg,
+            'change_pct': change_pct, 'can_compare': can_compare,
+        })
+    return rows

@@ -38,7 +38,7 @@ with st.sidebar:
     page = st.radio('메뉴', PAGES, key='page', label_visibility='collapsed')
     st.divider()
     window = WINDOW
-    st.markdown(f'<div class="side-note"><b>비교 기준</b><br>핵심 KPI·주요 발견·국가별 비교: 달력 주(월~일) 기준 — 업데이트 주 vs 전주. 일별 추이 차트: 전주(월~일) vs 업데이트 주(월~일), 업데이트일 D0 표시.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="side-note"><b>비교 기준</b><br>업데이트 진단: 달력 주(월~일) 기준 · 업데이트 주 vs 전주.<br>업데이트 비교·국가별 반응: 업데이트 주기(D0~다음D0-1) 기준 · 직전 주기 대비.</div>', unsafe_allow_html=True)
     st.markdown('<div class="side-note">Sensor Tower 추정치 기반입니다. 관찰된 변화이며 업데이트의 인과적 효과나 콘텐츠별 매출 기여율이 아닙니다.</div>', unsafe_allow_html=True)
     if failed:
         with st.expander(f'읽지 못한 프로젝트 {len(failed)}개'):
