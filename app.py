@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pandas as pd
 import streamlit as st
 
+import analysis as an
 import registry
 import report
 import ui
@@ -85,10 +86,46 @@ if scope == 'common':
     scope_note = (f'집계 범위 — 공통 {len(ctx.common)}개국: {", ".join(ranked_common)} '
                   '(매출 파일과 DAU 파일 양쪽에 모두 있는 개별 국가를 매출·DAU 모두 같은 목록으로 합산)')
 else:
-    scope_note = (f'집계 범위 — 파일 전체 합계: 매출 파일 {", ".join(ctx.rev_countries)} + 기타 / '
+    scope_note = (f'집계 범위 — 전체 국가: 매출 파일 {", ".join(ctx.rev_countries)} + 기타 / '
                   f'DAU 파일 {", ".join(ctx.dau_countries)} + 기타 (두 파일의 국가 구성이 다름)')
+
+# ── 업데이트 비교·구성 화면이 공유하는 주기 집계 ──────────────────────────────
+# scope·project·data가 확정된 뒤 한 번만 계산하고 env에 넣는다.
+_rs, _ds = ctx.series(scope)
+rev_cycles = an.cycle_compare(_rs, project.updates, cutoff_date=data.data_cutoff,
+                               next_update_date=data.next_update_date)
+pre_period = None
+if rev_cycles:
+    _pre_len = rev_cycles[0]['days']
+    _pre_end = pd.Timestamp(rev_cycles[0]['date']) - pd.Timedelta(days=1)
+    _pre_start = _pre_end - pd.Timedelta(days=_pre_len - 1)
+    _rs_valid = _rs.dropna()
+    _data_start = _rs_valid.index.min() if len(_rs_valid) > 0 else None
+    if _data_start is not None and _pre_start >= _data_start:
+        _pre_data = _rs[(_rs.index >= _pre_start) & (_rs.index <= _pre_end)].dropna()
+        if len(_pre_data) > 0:
+            _pre_total = float(_pre_data.sum())
+            pre_period = {
+                'd_start': str(_pre_start.date()),
+                'd_end': str(_pre_end.date()),
+                'days': len(_pre_data),
+                'total': _pre_total,
+                'daily_avg': _pre_total / len(_pre_data),
+            }
+dau_cycles = an.cycle_compare(_ds, project.updates, cutoff_date=data.data_cutoff,
+                               next_update_date=data.next_update_date)
+pre_dau_period = None
+if pre_period:
+    _ps = pd.Timestamp(pre_period['d_start'])
+    _pe = pd.Timestamp(pre_period['d_end'])
+    _pre_dau = _ds[(_ds.index >= _ps) & (_ds.index <= _pe)].dropna()
+    if len(_pre_dau) > 0:
+        pre_dau_period = {'daily_avg': float(_pre_dau.mean()), 'days': len(_pre_dau)}
+
 env = SimpleNamespace(project=project, data=data, ctx=ctx, upd=upd, window=window, scope=scope, rep=rep,
-                      highlights=report.highlights(upd), scope_note=scope_note)
+                      highlights=report.highlights(upd), scope_note=scope_note,
+                      rev_cycles=rev_cycles, dau_cycles=dau_cycles,
+                      pre_period=pre_period, pre_dau_period=pre_dau_period)
 
 if page == '업데이트 진단':
     diagnosis.render(env)

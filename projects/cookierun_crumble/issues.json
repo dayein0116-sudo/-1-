@@ -1,0 +1,28 @@
+[
+  {
+    "id": "balance-launch",
+    "title": "출시 1~2일차 연속 밸런스 패치",
+    "type": "밸런스 / 이용자 반응",
+    "related_updates": ["2026-08-13"],
+    "events": [
+      {"date": "2026-07-30", "summary": "1차 밸런스 조정 진행 및 관련 사과 보상 지급", "source_confirmed": false},
+      {"date": "2026-07-30", "summary": "2차 밸런스 조정 진행 및 사과 보상 지급", "source_confirmed": false},
+      {"date": "2026-07-31", "summary": "3차 밸런스 조정 진행 및 사과·보상 안내", "source_confirmed": false}
+    ],
+    "summary": "출시 당일부터 이틀에 걸쳐 3차례 밸런스 조정 진행. 각 조정 후 사과 보상 지급. 이용자 불만 사례 다수 확인됨.",
+    "source_confirmed": false,
+    "source_note": "공식 공지 원문 미확보 — 사용자 요약 자료 기반, 원문 제공 후 갱신 예정"
+  },
+  {
+    "id": "update-cycle-change",
+    "title": "업데이트 주기 변경 안내 (월 1회 → 2주 1회)",
+    "type": "운영 정책 변경",
+    "related_updates": ["2026-08-13"],
+    "events": [
+      {"date": "2026-08-05", "summary": "월 2회 단위 업데이트 체계로 전환 공지", "source_confirmed": false}
+    ],
+    "summary": "기존 월 1회 업데이트에서 2주 단위(월 2회) 업데이트로 변경하는 운영 정책 변경 안내.",
+    "source_confirmed": false,
+    "source_note": "공식 공지 원문 미확보 — 사용자 요약 자료 기반, 원문 제공 후 갱신 예정"
+  }
+]

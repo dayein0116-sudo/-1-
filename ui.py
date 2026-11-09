@@ -16,19 +16,19 @@ KRW_RATE = 1350  # 1 USD = 1,350 KRW (Sensor Tower 매출 고정 환율, 표시 
 def fmt_krw(v):
     """USD → KRW 표시 문자열. 계산은 원본 USD 유지."""
     if v is None:
-        return '분析 불가'
+        return '분석 불가'
     krw = v * KRW_RATE
     if krw >= 1e8:
         return f'약 {krw / 1e8:.1f}억 원'
     if krw >= 1e4:
-        return f'약 {int(krw / 1e4):,}만 원'
+        return f'약 {int(round(krw / 1e4)):,}만 원'
     return f'{krw:,.0f}원'
 
 
 def fmt_krw_delta(v):
     """USD 증감액 → KRW 증감 표시 (부호 포함)."""
     if v is None:
-        return '분析 불가'
+        return '분석 불가'
     krw = v * KRW_RATE
     if abs(krw) >= 1e8:
         return f'{krw / 1e8:+.1f}억 원'
@@ -38,7 +38,7 @@ def fmt_krw_delta(v):
 
 
 def fmt_dau(v):
-    return '분析 불가' if v is None else f'{v:,.0f}명'
+    return '분석 불가' if v is None else f'{v:,.0f}명'
 
 
 # 증감률 부호별 색상: 양수=빨간색(증가), 음수=파란색(감소) — 한국 게임 관례

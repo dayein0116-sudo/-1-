@@ -11,6 +11,10 @@ import ui
 from ui import esc, fmt_range, fp, fx
 
 
+_HISTORY_DAYS = 30
+_HISTORY_MAX = 5
+
+
 # ── 상단 요약 + KPI ────────────────────────────────────────
 def _hero(env):
     u, rep = env.upd, env.rep
@@ -84,7 +88,7 @@ def _kpis(env):
         '<table style="width:100%;border-collapse:collapse;margin-top:6px">'
         f'<thead><tr>'
         f'<th style="{th.format("left")}">기간</th>'
-        f'<th style="{th.format("right")}">추정 매출 합계</th>'
+        f'<th style="{th.format("right")}">매출 합계</th>'
         f'<th style="{th.format("right")}">일평균 DAU</th>'
         f'</tr></thead><tbody>'
         + _row(f'{prev_l} <span style="font-weight:400;font-size:12px;color:var(--muted)">({ps.strftime("%m/%d")}~{pe.strftime("%m/%d")})</span>',
@@ -104,11 +108,12 @@ def _kpis(env):
     x = an.day_vs_prev(rs, d, 0, n)
     if x and x['pct'] is not None:
         wd = '월화수목금토일'[x['prev_date'].dayofweek]
-        st.caption(f'업데이트 당일(D0) 추정 매출 {ui.fmt_krw(x["cur"])} — {n}일 전 같은 요일({x["prev_date"]:%m/%d} {wd}) {ui.fmt_krw(x["prev"])} 대비 {fp(x["pct"])} (하루 단위 참고값)')
+        st.caption(f'업데이트 당일(D0) 매출 {ui.fmt_krw(x["cur"])} — {n}일 전 같은 요일({x["prev_date"]:%m/%d} {wd}) {ui.fmt_krw(x["prev"])} 대비 {fp(x["pct"])} (하루 단위 참고값)')
     if w_r and w_r.get('peak_pct') is not None:
-        st.caption(f'{cur_l} 최고 일 추정 매출 {ui.fmt_krw(w_r["cur_peak"])} — {prev_l} 최고 일 {ui.fmt_krw(w_r["prev_peak"])} 대비 {fp(w_r["peak_pct"])}')
-    st.caption(f'비교 기준: {prev_l}({ps.strftime("%m/%d")}–{pe.strftime("%m/%d")}) 대비 {cur_l}({ws.strftime("%m/%d")}–{we.strftime("%m/%d")}) · 월–일 기준. '
-               f'D0 이전 {pre_days}일이 업데이트 주에 포함됩니다. 추정 매출은 Sensor Tower USD → 1,350원 환산. 관찰이지 인과 아님.')
+        st.caption(f'{cur_l} 최고 일 매출 {ui.fmt_krw(w_r["cur_peak"])} — {prev_l} 최고 일 {ui.fmt_krw(w_r["prev_peak"])} 대비 {fp(w_r["peak_pct"])}')
+    pre_note = f', 업데이트 이전 {pre_days}일 포함' if pre_days > 0 else ''
+    st.caption(f'업데이트 전후 매출 비교 — 이전 주: {ps.strftime("%m/%d")}–{pe.strftime("%m/%d")} / 업데이트 주: {ws.strftime("%m/%d")}–{we.strftime("%m/%d")}{pre_note}')
+    st.caption('집계 기준: 월요일~일요일 · Sensor Tower 추정 매출 · 1달러 = 1,350원')
 
 
 def _findings(env):
@@ -124,20 +129,20 @@ def _findings(env):
 
     r_up, d_up = _dir(w_r), _dir(w_d)
     if r_up is not None and d_up is not None:
-        if r_up and d_up:            headline = '추정 매출과 DAU 모두 증가'
-        elif not r_up and not d_up:  headline = '추정 매출과 DAU 모두 감소'
-        elif r_up:                   headline = '추정 매출은 증가했지만, DAU는 감소'
-        else:                        headline = '추정 매출은 감소했지만, DAU는 증가'
+        if r_up and d_up:            headline = '매출과 DAU 모두 증가'
+        elif not r_up and not d_up:  headline = '매출과 DAU 모두 감소'
+        elif r_up:                   headline = '매출은 증가했지만, DAU는 감소'
+        else:                        headline = '매출은 감소했지만, DAU는 증가'
     elif r_up is not None:
-        headline = f'추정 매출 {"증가" if r_up else "감소"} / DAU 계산 불가'
+        headline = f'매출 {"증가" if r_up else "감소"} / DAU 계산 불가'
     elif d_up is not None:
-        headline = f'추정 매출 계산 불가 / DAU {"증가" if d_up else "감소"}'
+        headline = f'매출 계산 불가 / DAU {"증가" if d_up else "감소"}'
     else:
-        headline = '추정 매출·DAU 계산 불가'
+        headline = '매출·DAU 계산 불가'
 
     pct_parts = []
     if w_r and w_r['pct'] is not None:
-        pct_parts.append(f'추정 매출 {ui.fp_colored(w_r["pct"])}')
+        pct_parts.append(f'매출 {ui.fp_colored(w_r["pct"])}')
     if w_d and w_d['pct'] is not None:
         pct_parts.append(f'일평균 DAU {ui.fp_colored(w_d["pct"])}')
     pct_note_html = ' · '.join(pct_parts) if pct_parts else '수치 계산 불가'
@@ -156,12 +161,22 @@ def _findings(env):
             pattern = f'D0~D+{kmax} 전주 동일 요일 대비 모두 마이너스(-)'
         elif vals[0][1] > 0:
             first_neg = next(k for k, v in vals if v < 0)
-            pos_range = 'D0만' if first_neg == 1 else f'D0~D+{first_neg - 1}'
-            pattern = f'{pos_range} 전주 동일 요일 대비 플러스(+), D+{first_neg}부터 마이너스(-) 전환'
+            after = [(k, v) for k, v in vals if k >= first_neg]
+            # 최소 2개 이상 연속 음수여야 "전환"으로 표현 — 단 1일은 혼재로 처리
+            if all(v < 0 for _, v in after) and len(after) >= 2:
+                pos_range = 'D0만' if first_neg == 1 else f'D0~D+{first_neg - 1}'
+                pattern = f'{pos_range} 전주 동일 요일 대비 플러스(+), D+{first_neg}부터 마이너스(-) 전환'
+            else:
+                pattern = f'D0~D+{kmax}: 플러스(+) {len(pos)}일, 마이너스(-) {len(neg)}일 (전주 동일 요일 대비)'
         elif vals[0][1] < 0:
             first_pos = next(k for k, v in vals if v > 0)
-            neg_range = 'D0만' if first_pos == 1 else f'D0~D+{first_pos - 1}'
-            pattern = f'{neg_range} 전주 동일 요일 대비 마이너스(-), D+{first_pos}부터 플러스(+) 전환'
+            after = [(k, v) for k, v in vals if k >= first_pos]
+            # 최소 2개 이상 연속 양수여야 "전환"으로 표현 — 단 1일은 혼재로 처리
+            if all(v > 0 for _, v in after) and len(after) >= 2:
+                neg_range = 'D0만' if first_pos == 1 else f'D0~D+{first_pos - 1}'
+                pattern = f'{neg_range} 전주 동일 요일 대비 마이너스(-), D+{first_pos}부터 플러스(+) 전환'
+            else:
+                pattern = f'D0~D+{kmax}: 플러스(+) {len(pos)}일, 마이너스(-) {len(neg)}일 (전주 동일 요일 대비)'
         else:
             pattern = f'D0~D+{kmax}: 플러스(+) {len(pos)}일, 마이너스(-) {len(neg)}일 (전주 동일 요일 대비)'
         basis = ' / '.join(f'{"D0" if k == 0 else f"D+{k}"} {ui.fp_colored(v)}' for k, v in vals)
@@ -261,7 +276,7 @@ def _response(env):
                f'전주(월~일) {ps:%m/%d}–{ps + pd.Timedelta(days=6):%m/%d} 대비 업데이트 주(월~일) '
                f'{ws:%m/%d}–{ws + pd.Timedelta(days=6):%m/%d} · 업데이트가 발생한 요일에 D0 표시')
     c1, c2 = st.columns(2)
-    for col, key, label, color in ((c1, 'rev', '추정 매출', charts.BLUE), (c2, 'dau', 'DAU', charts.GREEN)):
+    for col, key, label, color in ((c1, 'rev', '매출', charts.BLUE), (c2, 'dau', 'DAU', charts.GREEN)):
         with col.container(key=f'card_resp_{key}'):
             ui.card_title(f'일별 {label}', f'전주 대비 업데이트 주 일별 추이 · {rep[f"{key}_scope_label"]}')
             ser = rep[f'{key}_series']
@@ -282,8 +297,8 @@ def _comparison(env):
     rep, n = env.rep, env.rep['window']
     cur_l, prev_l = _cal_labels()
     ui.section(2, '국가별 비교', f'국가별 {cur_l} vs {prev_l} — 증감률만으로 판단하지 말고 실제 규모(값·증감액)와 함께 보세요')
-    metric = st.radio('표시 지표', ['추정 매출', 'DAU'], horizontal=True, key='cmp_metric')
-    key = 'rev' if metric == '추정 매출' else 'dau'
+    metric = st.radio('표시 지표', ['매출', 'DAU'], horizontal=True, key='cmp_metric')
+    key = 'rev' if metric == '매출' else 'dau'
     unit = '합계' if key == 'rev' else '일평균'
     tbl = report.country_week_table(env.ctx, rep, key)
     total, body = tbl[0], tbl[1:]
@@ -297,7 +312,7 @@ def _comparison(env):
                 f'{prev_l} {unit}': fv(r['prev']), f'{cur_l} {unit}': fv(r['cur']),
                 '증감액': fd(r['diff']), '증감률': fp(r['pct']) if r['pct'] is not None else '분석 불가'}
 
-    rows = [line(total, '합계 (공통 {}개국)'.format(len(env.ctx.common)) if rep['scope'] == 'common' else '합계 (파일 전체)')] + [line(r) for r in body]
+    rows = [line(total, '합계 (공통 {}개국)'.format(len(env.ctx.common)) if rep['scope'] == 'common' else '합계 (전체 국가)')] + [line(r) for r in body]
     c1, c2 = st.columns([0.8, 1.55])
     with c1.container(key='card_country'):
         basis = st.radio('막대 기준', ['증감액 (실제 규모)', '증감률'], horizontal=True, key='cmp_basis')
@@ -329,7 +344,7 @@ def _daily_table(env):
     rep, n, d = env.rep, env.rep['window'], env.upd['date']
     ui.section(3, f'일자별 값 — {n}일 전 같은 요일과 비교 (참고)', '날짜별 실제 값과 증감 — 하루 단위 참고 지표이며 업데이트 효과를 직접 측정하는 값이 아닙니다')
     c1, c2 = st.columns(2)
-    for col, key, label in ((c1, 'rev', '추정 매출'), (c2, 'dau', 'DAU')):
+    for col, key, label in ((c1, 'rev', '매출'), (c2, 'dau', 'DAU')):
         with col.container(key=f'card_daily_{key}'):
             ui.card_title(label, rep[f'{key}_scope_label'])
             rows = []
@@ -402,11 +417,33 @@ def _narrative(env):
     # 2열 — [참고] 함께 고려할 요인 / [한계]
     d_col, e_col = st.columns(2)
     with d_col.container(key='card_conf'):
+        _, in_history = _get_op_issues_for_window(env)
         flags = ''.join(f'<li><b>{esc(f["kind"])}</b> — {esc(f["text"])}</li>' for f in rep['flags'])
         conf = ''.join(f'<li>{esc(x)}</li>' for x in u['confounds'])
+        history_html = ''
+        if in_history:
+            items = ''.join(
+                f'<li><b>{"⚠ " if not i["source_confirmed"] else ""}{esc(i["title"])}</b>'
+                f' ({esc(", ".join(sorted({ev["date"][5:] for ev in i["events"]})))})'
+                f': {esc(i["summary"])}</li>'
+                for i in in_history)
+            history_html = (f'<div class="meta" style="margin-top:8px">이전 운영 이슈</div>'
+                            f'<ul>{items}</ul>'
+                            f'<div class="meta">매출·DAU 변화의 원인으로 단정하지 않습니다. ⚠: 공식 원문 미확보.</div>')
         st.markdown('<div class="blk"><h4><span class="tag-fact">[참고]</span> 함께 고려할 요인 <span class="meta">(외부 요인 · 동시 투입 요소)</span></h4>'
                     + (f'<div class="meta">공지·등록 자료</div><ul>{conf}</ul>' if conf else '')
-                    + f'<div class="meta" style="margin-top:8px">시점·데이터 점검</div><ul>{flags}</ul></div>', unsafe_allow_html=True)
+                    + f'<div class="meta" style="margin-top:8px">시점·데이터 점검</div><ul>{flags}</ul>'
+                    + history_html + '</div>', unsafe_allow_html=True)
+        if in_history:
+            with st.expander('이전 운영 이슈 세부 내용', expanded=False):
+                for iss in in_history:
+                    unconf = not iss['source_confirmed']
+                    st.markdown(f'**{"⚠ " if unconf else ""}{iss["title"]}** · 유형: {iss["type"]}')
+                    for ev in iss.get('events', []):
+                        note = ' *(미확인)*' if not ev['source_confirmed'] else ''
+                        st.markdown(f'- {ev["date"]}: {ev["summary"]}{note}')
+                    if iss.get('source_note'):
+                        st.caption(iss['source_note'])
     with e_col.container(key='card_limits'):
         limits = rep['limits']
         visible_lim, extra_lim = limits[:3], limits[3:]
@@ -425,7 +462,7 @@ def _more(env):
         with t1:
             st.caption('이 업데이트와 같은 기준으로 다른 관점에서 볼 수 있습니다.')
             cols = st.columns(3)
-            for col, (pg, desc) in zip(cols, (('업데이트 비교', '4건을 같은 기준으로 비교'), ('국가별 반응', '국가 하나를 골라 업데이트별 반응'),
+            for col, (pg, desc) in zip(cols, (('업데이트 비교', '4건을 같은 기준으로 비교'), ('국가별 반응', '국가를 선택해 업데이트별 매출·이용자 반응을 확인할 수 있습니다.'),
                                               ('업데이트 구성', '공지 항목 분류 전체'))):
                 col.button(pg, key=f'go_{pg}', on_click=ui.goto, args=(pg,), width='stretch')
                 col.caption(desc)
@@ -445,11 +482,56 @@ def _glossary(env):
         st.markdown(
             f'- **D0**: 업데이트 당일입니다. **이전 {n}일**은 D-{n}~D-1, **이후 {n}일**은 D0~D+{n - 1}(당일 포함)이며 달력 주가 아닙니다. 아래 일별 추이 차트에서 사용합니다.\n'
             f'- **달력 주(월~일) 기준**: 핵심 KPI·주요 발견·국가별 비교의 "주간 변화율"은 D0이 포함된 월~일(업데이트 주) vs 그 직전 월~일(전주)을 비교합니다. 업데이트 주에 D0 이전 날이 포함될 수 있습니다.\n'
-            f'- **추정 매출 주간 합계**: 달력 주 7일 합계입니다. **일평균 DAU**: 달력 주 7일 평균입니다. 7일 데이터가 없으면 "계산 불가"로 표시합니다.\n'
+            f'- **매출 주간 합계**: 달력 주 7일 합계입니다. **일평균 DAU**: 달력 주 7일 평균입니다. 7일 데이터가 없으면 "계산 불가"로 표시합니다.\n'
             f'- **{n}일 전 같은 요일 비교**: 하루 단위 참고값입니다. 업데이트 효과를 직접 측정하는 지표가 아닙니다.\n'
             f'- **DAU**: {report.DAU_NOTE}\n'
             '- **추정 매출**: Sensor Tower 추정치이며 원본 CSV의 단위 그대로입니다 (통화·집계 범위 미확인).\n'
-            '- **집계 범위**: "공통 N개국"은 매출·DAU 파일 모두에 있는 개별 국가를 같은 목록으로 합산합니다. "파일 전체 합계"는 각 파일의 기타 등을 포함하며 두 파일의 국가 구성이 다릅니다.')
+            '- **집계 범위**: "공통 N개국"은 매출·DAU 파일 모두에 있는 개별 국가를 같은 목록으로 합산합니다. "전체 국가"는 각 파일의 기타 등을 포함하며 두 파일의 국가 구성이 다릅니다.')
+
+
+def _get_op_issues_for_window(env):
+    """Returns (in_window, in_history) for the current update.
+    in_window: event dates fall within the analysis window.
+    in_history: explicitly linked via related_updates and not in_window."""
+    issues = getattr(env.data, 'op_issues', [])
+    if not issues:
+        return [], []
+    d0 = pd.Timestamp(env.upd['date'])
+    win_start = d0 - pd.Timedelta(days=env.window)
+    win_end = d0 + pd.Timedelta(days=env.window - 1)
+
+    def _in_range(iss, lo, hi):
+        return any(lo <= pd.Timestamp(ev['date']) <= hi for ev in iss['events'])
+
+    in_window = [i for i in issues if _in_range(i, win_start, win_end)]
+    in_history = [i for i in issues
+                  if env.upd['date'] in i.get('related_updates', [])
+                  and not _in_range(i, win_start, win_end)][:_HISTORY_MAX]
+    return in_window, in_history
+
+
+def _render_issue_card(iss):
+    unconfirmed = not iss['source_confirmed']
+    label = f"{'⚠ ' if unconfirmed else ''}{iss['title']}"
+    with st.expander(label, expanded=False):
+        st.markdown(f'**유형**: {iss["type"]}')
+        st.markdown(f'**요약**: {iss["summary"]}')
+        for ev in iss.get('events', []):
+            note = '' if ev['source_confirmed'] else ' *(미확인)*'
+            st.markdown(f'- **{ev["date"]}**: {ev["summary"]}{note}')
+        if iss.get('source_note'):
+            st.caption(iss['source_note'])
+
+
+def _op_issues(env):
+    """분석 기간 내 운영 이슈 — 이력(history)은 _narrative > 함께 고려할 요인에 표시."""
+    in_window, _ = _get_op_issues_for_window(env)
+    if not in_window:
+        return
+    st.markdown('#### 참고 운영 이슈')
+    st.caption('분석 기간 내에 발생한 운영 이슈입니다. 매출 변화와의 인과 관계는 별도로 판단해야 합니다.')
+    for iss in in_window:
+        _render_issue_card(iss)
 
 
 def render(env):
@@ -463,4 +545,5 @@ def render(env):
     _comparison(env)
     _daily_table(env)
     _narrative(env)
+    _op_issues(env)
     _more(env)

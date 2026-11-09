@@ -306,7 +306,7 @@ def daily_noise_sigma(s, upd_dates, pre=2, post=6, min_obs=12):
     if len(s) < 14:
         return None
     ls = np.log(s)
-    res = ls - ls.rolling(7, center=True, min_periods=4).mean()
+    res = ls - ls.rolling(7, center=True, min_periods=7).mean()
     mask = pd.Series(True, index=res.index)
     for u in upd_dates:
         t = pd.Timestamp(u)
@@ -444,7 +444,6 @@ def timing_flags(upd, updates, window, series=None):
             r2, r1 = series.get(d - pd.Timedelta(days=2), np.nan), series.get(d - pd.Timedelta(days=1), np.nan)
             if not (pd.isna(r2) or pd.isna(r1)):
                 flags.append({'kind': '업데이트 직전', 'text': f'업데이트 직전 D-2는 직전 {n}일 일평균 대비 {(r2 / base - 1) * 100:+.0f}%, D-1은 {(r1 / base - 1) * 100:+.0f}%입니다 (업데이트 전에 이미 움직였는지 확인용).'})
-    flags.append({'kind': '요일', 'text': f'업데이트일(D0)은 {"월화수목금토일"[d.dayofweek]}요일입니다. 직전·이후 {n}일에는 각 요일이 한 번씩 들어가지만(n=7일 때) 연휴·프로모션 영향은 별도로 남습니다.'})
     return flags
 
 
@@ -475,6 +474,156 @@ def day_vs_prev(s, date, k=0, n=7):
         return None
     return {'cur': float(x), 'prev': float(y), 'pct': (float(x) / float(y) - 1) * 100 if y else None,
             'cur_date': d + pd.Timedelta(days=k), 'prev_date': d + pd.Timedelta(days=k - n)}
+
+
+# ─────────────────────────────────────────────────────────────
+# 9. 매출 추세 진단 (전체 개요 화면용)
+# ─────────────────────────────────────────────────────────────
+def revenue_trend_stats(rev_total, upd_dates, half_days=21):
+    """관측 기간 전후반(각 half_days일, 요일 구성 균등) 평균 비교."""
+    n = len(rev_total)
+    if n < 14:
+        return {'can_compare': False, 'reason': f'데이터 {n}일 — 최소 14일 필요'}
+    h = min(half_days, (n - 7) // 2)  # 두 구간 사이 최소 7일 여유
+    if h < 7:
+        return {'can_compare': False, 'reason': f'데이터 {n}일 — 비교 기간 미달'}
+    first, last = rev_total.iloc[:h], rev_total.iloc[-h:]
+    fm, lm = float(first.mean()), float(last.mean())
+    return {
+        'can_compare': True, 'half_days': h,
+        'first_mean': fm, 'last_mean': lm,
+        'change_pct': (lm / fm - 1) * 100 if fm > 0 else float('nan'),
+        'first_start': first.index[0], 'first_end': first.index[-1],
+        'last_start': last.index[0], 'last_end': last.index[-1],
+    }
+
+
+def baseline_level(rev_total, upd_dates, pre=2, post=6, min_days=14):
+    """업데이트 영향권(D-pre ~ D+post) 제외 후 기저 수준."""
+    blocked = pd.Series(False, index=rev_total.index)
+    for u in upd_dates:
+        d = pd.Timestamp(u)
+        blocked[(rev_total.index >= d - pd.Timedelta(days=pre)) &
+                (rev_total.index <= d + pd.Timedelta(days=post))] = True
+    clean = rev_total[~blocked].dropna()
+    if len(clean) < min_days:
+        return {'can_compute': False, 'day_count': len(clean),
+                'reason': f'업데이트 영향권 제외 후 {len(clean)}일 — 최소 {min_days}일 필요'}
+    return {'can_compute': True, 'mean': float(clean.mean()),
+            'day_count': len(clean), 'date_min': clean.index.min(), 'date_max': clean.index.max()}
+
+
+def rebound_persistence_all(rev_total, upd_dates, n=7):
+    """각 업데이트의 D0~D+6 반응 지속성 (D0~D2 초기 vs D3~D6 후기 — 평균 대 평균)."""
+    rows = []
+    for u in upd_dates:
+        _, ratios = profile(rev_total, u, n)
+        p = persistence(ratios) if ratios else None
+        rows.append({'date': u, 'has_data': p is not None, 'persistence': p})
+    return rows
+
+
+def country_half_compare(rev_df, common_countries, half_days=21):
+    """공통 국가별 전후반(각 half_days일) 평균 비교."""
+    n = len(rev_df)
+    h = min(half_days, (n - 7) // 2) if n >= 14 else 0
+    if h < 7:
+        return {}
+    out = {}
+    for c in common_countries:
+        if c not in rev_df.columns:
+            out[c] = {'can_compare': False, 'reason': '매출 파일에 없음'}
+            continue
+        s = rev_df[c]
+        first = s.iloc[:h].dropna()
+        last = s.iloc[-h:].dropna()
+        if len(first) < h // 2 or len(last) < h // 2 or first.mean() <= 0:
+            out[c] = {'can_compare': False, 'reason': '데이터 부족'}
+            continue
+        fm, lm = float(first.mean()), float(last.mean())
+        out[c] = {'can_compare': True, 'first_mean': fm, 'last_mean': lm,
+                  'change_pct': (lm / fm - 1) * 100}
+    return out
+
+
+def cycle_compare(rev_total, updates, cutoff_date=None, next_update_date=None):
+    """각 업데이트의 D0~다음D0-1 기간 성과를 계산합니다.
+
+    cutoff_date:      str/Timestamp, 이 날짜 이후 데이터를 제외합니다 (CSV 미변경, 슬라이싱만).
+    next_update_date: str/Timestamp, 마지막 업데이트의 다음 D0 (알려진 경우).
+                      지정하면 마지막 주기의 days=전체 예정 일수, valid_days=실제 집계 일수로 분리됩니다.
+                      지정하지 않으면 종전과 동일하게 days=valid_days (열린 주기).
+
+    반환: 주기별 dict 목록 (업데이트 순서대로)
+      date, title, d_start, d_end, d_end_nominal, days, valid_days,
+      total, daily_avg, complete, truncated, open_ended,
+      prev_daily_avg, change_pct, change_type, can_compare
+    """
+    cutoff = pd.Timestamp(cutoff_date) if cutoff_date else None
+    next_upd = pd.Timestamp(next_update_date) if next_update_date else None
+    data_end = rev_total.index.max()
+    rows = []
+    for i, u in enumerate(updates):
+        d_start = pd.Timestamp(u['date'])
+        is_last = (i + 1 == len(updates))
+        open_ended = False
+
+        if not is_last:
+            d_end_nominal = pd.Timestamp(updates[i + 1]['date']) - pd.Timedelta(days=1)
+            complete = True
+            planned_days = None  # 완료 주기: d_end 확정 후 계산
+        elif next_upd is not None:
+            # 마지막 업데이트 + 다음 D0 확정 → 전체 예정 일수 미리 확정
+            d_end_nominal = next_upd - pd.Timedelta(days=1)
+            complete = False
+            planned_days = int((d_end_nominal - d_start).days) + 1
+        else:
+            d_end_nominal = data_end
+            complete = False
+            open_ended = True  # 다음 업데이트 일정 미확정
+            planned_days = None  # d_end 확정 후 계산
+
+        truncated = False
+        d_end = d_end_nominal
+        if cutoff is not None and d_end > cutoff:
+            d_end = cutoff
+            truncated = True
+            complete = False
+        # 실제 데이터 범위를 넘지 않도록 (메이플 10/15처럼 데이터가 주기 끝까지 없는 경우)
+        d_end = min(d_end, data_end)
+
+        period = rev_total[(rev_total.index >= d_start) & (rev_total.index <= d_end)].dropna()
+        days = planned_days if planned_days is not None else int((d_end - d_start).days) + 1
+        valid_days = len(period)
+        total = float(period.sum()) if valid_days > 0 else None
+        daily_avg = total / valid_days if valid_days > 0 and total is not None else None
+
+        rows.append({
+            'date': u['date'], 'title': u.get('title', ''),
+            'd_start': str(d_start.date()), 'd_end': str(d_end.date()),
+            'd_end_nominal': str(d_end_nominal.date()),
+            'days': days, 'valid_days': valid_days,
+            'total': total, 'daily_avg': daily_avg,
+            'complete': complete, 'truncated': truncated, 'open_ended': open_ended,
+        })
+
+    # 2차 패스: 직전 완료 주기와 비교율 계산
+    for i, row in enumerate(rows):
+        prev = rows[i - 1] if i > 0 else None
+        if prev is None or not prev['complete'] or not row['complete']:
+            row.update({'prev_daily_avg': prev['daily_avg'] if prev else None,
+                        'change_pct': None, 'change_type': None, 'can_compare': False})
+            continue
+        if prev['daily_avg'] is None or row['daily_avg'] is None or prev['daily_avg'] <= 0:
+            row.update({'prev_daily_avg': prev['daily_avg'],
+                        'change_pct': None, 'change_type': None, 'can_compare': False})
+            continue
+        # 주기 길이에 관계없이 항상 일평균 기준으로 비교
+        pct = (row['daily_avg'] / prev['daily_avg'] - 1) * 100
+        ctype = 'daily_avg'
+        row.update({'prev_daily_avg': prev['daily_avg'],
+                    'change_pct': pct, 'change_type': ctype, 'can_compare': pct is not None})
+    return rows
 
 
 def week_compare_cal(s, date):

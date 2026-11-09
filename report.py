@@ -11,9 +11,9 @@ import pandas as pd
 
 import analysis as an
 
-SCOPE_LABELS = {'common': '공통 {n}개국 합산', 'file': '파일 전체 합계 (개별 국가 + 기타)'}
-REV_SCOPE_LABELS = {'common': '공통 {n}개국 매출 합계', 'file': '매출 파일 전체 합계 (개별 국가 + 기타)'}
-DAU_SCOPE_LABELS = {'common': '공통 {n}개국 DAU 합계', 'file': 'DAU 파일 전체 합계 (개별 국가 + 기타)'}
+SCOPE_LABELS = {'common': '공통 {n}개국', 'file': '전체 국가 (기타 포함)'}
+REV_SCOPE_LABELS = {'common': '공통 {n}개국 매출', 'file': '전체 국가 매출 (기타 포함)'}
+DAU_SCOPE_LABELS = {'common': '공통 {n}개국 DAU', 'file': '전체 국가 DAU (기타 포함)'}
 DAU_NOTE = ('DAU 합계는 국가별 DAU 추정치를 같은 날짜끼리 더한 값입니다. 여러 국가에서 접속한 이용자가 중복 집계되는지 CSV로는 확인되지 않아 '
             '고유 이용자 수가 아닙니다. 국가별 원본 수치는 변경하지 않았습니다.')
 
@@ -209,9 +209,9 @@ def limits_for(rep, upd, ctx):
     out.append('매출과 DAU의 플랫폼·집계 범위가 같은지 확인되지 않아 두 지표를 결합한 지표(ARPDAU 등)는 계산하지 않습니다. 매출 CSV 통화는 USD(Sensor Tower), 표시는 1 USD = 1,350원 환산. 플랫폼 범위는 확인되지 않았습니다.')
     out.append('결제자 수·ARPPU·신규/복귀 이용자 수는 데이터에 없어 판단하지 않습니다. 운영 이슈가 있었더라도 매출·DAU 증감과 연결하지 않습니다.')
     if rep['scope'] == 'common':
-        out.append('"공통 국가 합산"은 매출·DAU 파일 모두에 있는 국가만 합친 값이라 파일 전체 합계(기타·홍콩·호주 등 포함)와 다릅니다.')
+        out.append('"공통 N개국"은 매출·DAU 파일 모두에 있는 국가만 합친 값이라 전체 국가 합계(기타·홍콩·호주 등 포함)와 다릅니다.')
     else:
-        out.append('파일 전체 합계의 DAU에는 매출 파일에 없는 국가와 기타가 섞여 있어, 특정 국가의 지속적인 증감이 합계 방향을 좌우할 수 있습니다.')
+        out.append('전체 국가 DAU에는 매출 파일에 없는 국가와 기타가 섞여 있어, 특정 국가의 지속적인 증감이 합계 방향을 좌우할 수 있습니다.')
     if any(c['rev'] and c['rev']['ok'] for c in rep['countries']):
         out.append('소규모 국가는 일 매출 규모가 작아 변동이 크므로 국가 간 배수를 단순 비교하지 않습니다.')
     out += [f'미반영: {x}' for x in upd['pending_review']]
