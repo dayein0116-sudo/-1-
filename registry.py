@@ -135,6 +135,44 @@ class ProjectData:
     data_cutoff: str = None        # 적용된 cutoff 날짜 (없으면 None)
     data_cutoff_reason: str = None # cutoff 사유
     next_update_date: str = None   # 마지막 업데이트의 다음 D0 (알려진 경우)
+    op_issues: list = field(default_factory=list)  # 운영 이슈 이력 (issues.json)
+
+
+def load_op_issues(project):
+    """projects/<id>/issues.json이 있으면 불러와 정규화합니다. 없으면 []."""
+    p = project.root / 'issues.json'
+    if not p.exists():
+        return []
+    raw = json.loads(p.read_text(encoding='utf-8'))
+    if not isinstance(raw, list):
+        raise ValueError(f'{project.id}/issues.json: 최상위가 배열이어야 합니다.')
+    out = []
+    for iss in raw:
+        for key in ('id', 'title', 'type', 'summary'):
+            if key not in iss:
+                raise ValueError(f'{project.id}/issues.json: 항목에 "{key}"가 없습니다.')
+        events = []
+        for ev in iss.get('events', []):
+            try:
+                date = pd.Timestamp(ev['date']).strftime('%Y-%m-%d')
+            except Exception:
+                raise ValueError(f'{project.id}/issues.json: 이벤트 날짜 형식 오류: {ev.get("date")}')
+            events.append({
+                'date': date,
+                'summary': str(ev.get('summary', '')),
+                'source_confirmed': bool(ev.get('source_confirmed', False)),
+            })
+        out.append({
+            'id': str(iss['id']),
+            'title': str(iss['title']),
+            'type': str(iss['type']),
+            'events': events,
+            'summary': str(iss['summary']),
+            'source_confirmed': bool(iss.get('source_confirmed', False)),
+            'source_note': str(iss.get('source_note', '')),
+            'related_updates': [str(d) for d in iss.get('related_updates', [])],
+        })
+    return out
 
 
 def load_project_data(project, extra_rev=None, extra_dau=None, overwrite=False):
@@ -165,6 +203,7 @@ def load_project_data(project, extra_rev=None, extra_dau=None, overwrite=False):
         rev = rev[rev.index <= cutoff_ts]
         dau = dau[dau.index <= cutoff_ts]
     next_upd_str = _PROJECT_NEXT_UPDATES.get(project.id)
+    op_issues = load_op_issues(project)
     return ProjectData(rev=rev, dau=dau, issues=issues, merge_info=info,
                        data_cutoff=cutoff_str, data_cutoff_reason=cutoff_reason,
-                       next_update_date=next_upd_str)
+                       next_update_date=next_upd_str, op_issues=op_issues)

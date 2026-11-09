@@ -35,7 +35,7 @@ def render(env):
     avail_countries = [c for c in ctx.display_countries if _available(c)]
     country = st.selectbox('국가', avail_countries, format_func=lambda c: _tag(ctx, c), key='country_sel')
     st.caption('매출만 있거나 DAU만 있는 국가는 있는 지표만 표시합니다. "기타"는 개별 국가가 아니라 제외합니다. 소규모 국가는 변동이 커서 증감률만으로 비교하지 않습니다. 국가별 DAU는 원본 수치 그대로이며, 합산하지 않은 국가 단독 값입니다.')
-    for key, df, lab, unit in (('rev', ctx.rev, '추정 매출', '합계'), ('dau', ctx.dau, 'DAU', '일평균')):
+    for key, df, lab, unit in (('rev', ctx.rev, '매출', '합계'), ('dau', ctx.dau, 'DAU', '일평균')):
         if country not in df:
             st.warning(f'{country}은(는) {"매출" if key == "rev" else "DAU"} 파일에 없어 해당 지표는 분석 불가입니다.')
             continue
@@ -62,9 +62,9 @@ def render(env):
 
     with st.expander('일별 추이 (전체 기간)'):
         t1, t2 = st.columns(2)
-        for col, df, lab in ((t1, ctx.rev, '추정 매출'), (t2, ctx.dau, 'DAU')):
+        for col, df, lab in ((t1, ctx.rev, '매출'), (t2, ctx.dau, 'DAU')):
             if country in df:
-                line_color = charts.BLUE if lab == '추정 매출' else charts.GREEN
+                line_color = charts.BLUE if lab == '매출' else charts.GREEN
                 fig = go.Figure(go.Scatter(x=df.index, y=df[country], mode='lines', line=dict(color=line_color)))
                 fig.update_layout(title=f'{country} 일별 {lab}', height=300, margin=dict(l=8, r=8, t=40, b=8))
                 fig.update_xaxes(type='date', tickformat='%Y/%m')

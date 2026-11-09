@@ -59,11 +59,11 @@ def render(env):
         '- **집계 범위**: "공통 N개국 합산"은 매출·DAU 파일 모두에 있는 국가만, "파일 전체 합계"는 기타 등을 포함합니다. 두 지표를 결합한 값(ARPDAU 등)은 계산하지 않습니다.\n'
         f'- {p.meta.get("data_note", "")}')
 
-    with st.expander('전체 기간 일별 추정 매출·DAU (참고용)'):
+    with st.expander('전체 기간 일별 매출·DAU (참고용)'):
         rev_total, dau_total = ctx.rev.sum(axis=1, min_count=1), ctx.dau.sum(axis=1, min_count=1)
         rev_krw = rev_total * ui.KRW_RATE / 1e8
         for s, title, suffix in (
-                (rev_krw, '일별 추정 매출 (원화 환산 억 원, 파일 전체 합계)', '억원'),
+                (rev_krw, '일별 매출 (원화 환산 억 원, 파일 전체 합계)', '억원'),
                 (dau_total, '일별 DAU (파일 전체 합계 — 매출 국가 범위와 다를 수 있음)', '명')):
             fig = go.Figure(go.Scatter(x=s.index, y=s.values, mode='lines', line=dict(color=charts.BLUE)))
             fig.update_layout(title=title, height=300, margin=dict(l=8, r=8, t=40, b=8),
@@ -91,44 +91,45 @@ def render(env):
     _ma_krw = _ma7 * ui.KRW_RATE / 1e8
     _fig = go.Figure()
     _fig.add_trace(go.Scatter(x=_rev_krw.index, y=_rev_krw.values, mode='lines',
-                               name='일별 추정 매출', line=dict(color='rgba(99,110,250,0.35)', width=1)))
+                               name='일별 매출', line=dict(color='rgba(99,110,250,0.35)', width=1)))
     _fig.add_trace(go.Scatter(x=_ma_krw.index, y=_ma_krw.values, mode='lines',
                                name='7일 이동평균 (추세 참고)', line=dict(color=charts.BLUE, width=2.5)))
-    _fig.update_layout(height=300, margin=dict(l=8, r=8, t=40, b=8),
-                        title='일별 추정 매출 · 7일 이동평균 (파일 전체 합계, 억 원)',
+    _fig.update_layout(height=300, margin=dict(l=8, r=8, t=40, b=60),
+                        title='일별 매출 · 7일 이동평균 (파일 전체 합계, 억 원)',
                         yaxis=dict(ticksuffix='억원'),
-                        legend=dict(orientation='h', y=1.15))
+                        legend=dict(orientation='h', yanchor='top', y=-0.25, x=0.5, xanchor='center'))
     st.plotly_chart(ui.mark_updates(_fig, p.updates), width='stretch', config={'displayModeBar': False})
     if _ts['can_compare']:
         st.markdown(
-            f'초반 **{_h}일** ({_ts["first_start"]:%m/%d}~{_ts["first_end"]:%m/%d}) 일평균 **${_ts["first_mean"]:,.0f}** · '
-            f'후반 **{_h}일** ({_ts["last_start"]:%m/%d}~{_ts["last_end"]:%m/%d}) 일평균 **${_ts["last_mean"]:,.0f}** '
+            f'초반 **{_h}일** ({_ts["first_start"]:%m/%d}–{_ts["first_end"]:%m/%d}) 일평균 **\\${_ts["first_mean"]:,.0f}** · '
+            f'후반 **{_h}일** ({_ts["last_start"]:%m/%d}–{_ts["last_end"]:%m/%d}) 일평균 **\\${_ts["last_mean"]:,.0f}** '
             f'({_ts["change_pct"]:+.1f}%)'
         )
     st.caption(f'※ 7일 이동평균은 추세 시각화용이며 단독으로 원인을 판정하지 않습니다. 초반·후반은 각 {_h}일({_h // 7}주)로 요일 구성이 같습니다.')
 
-    # A-2: 업데이트 영향권 제외 기저 수준
-    st.markdown('**업데이트 영향권 제외 기저 수준** (D-2 ~ D+6 차단)')
+    # A-2: 업데이트 기간을 제외한 평소 매출 수준
+    st.markdown('**업데이트 기간을 제외한 평소 매출 수준**')
     if _bs['can_compute']:
         st.markdown(
-            f'영향권 제외 후 **{_bs["day_count"]}일** 샘플 · 일평균 **${_bs["mean"]:,.0f}** '
-            f'({_bs["date_min"]:%m/%d}~{_bs["date_max"]:%m/%d} 범위에 분포)'
+            f'각 업데이트 D-2–D+6 제외 후 비연속적으로 남은 **{_bs["day_count"]}일** · '
+            f'일평균 **\\${_bs["mean"]:,.0f}** '
+            f'({_bs["date_min"]:%m/%d}–{_bs["date_max"]:%m/%d} 범위에 분포)'
         )
     else:
         st.warning(_bs['reason'])
 
-    # A-3: 반응 지속성 (D0~D2 vs D3~D6, 평균 대 평균)
-    st.markdown('**업데이트 반응 지속성** (D0~D2 초기 vs D3~D6 후기 — 직전 7일 대비 배수, 평균)')
+    # A-3: 반응 지속성 (D0–D2 vs D3–D6, 평균 대 평균)
+    st.markdown('**업데이트 이후 매출 반응 변화** (D0–D2 초기 vs D3–D6 후기 — 직전 7일 대비 배수, 평균)')
     _prows = []
     for _r in _pers:
         _pd = _r['persistence']
         if _pd:
             _prows.append({'업데이트': _r['date'],
-                            'D0~D2 초기': round(_pd['early'], 2),
-                            'D3~D6 후기': round(_pd['late'], 2),
-                            '후기/초기': round(_pd['retention'], 2)})
+                            'D0–D2 (초기 3일)': f"{_pd['early']:.2f}배",
+                            'D3–D6 (이후 4일)': f"{_pd['late']:.2f}배",
+                            '후기/초기 (배수)': f"{_pd['retention']:.2f}배" if _pd['retention'] is not None else '-'})
         else:
-            _prows.append({'업데이트': _r['date'], 'D0~D2 초기': '자료 부족', 'D3~D6 후기': '-', '후기/초기': '-'})
+            _prows.append({'업데이트': _r['date'], 'D0–D2 (초기 3일)': '자료 부족', 'D3–D6 (이후 4일)': '-', '후기/초기 (배수)': '-'})
     ui.table(pd.DataFrame(_prows))
     st.caption('1.0 미만이 반드시 반응 실패를 뜻하지 않습니다 — 직전 추세가 하락 중이면 1.0 이상 반응도 추세 연장일 수 있습니다.')
 
@@ -179,9 +180,9 @@ def render(env):
         st.markdown('**확인된 현상**')
         _obs = []
         if _ts['can_compare']:
-            _obs.append(f'추정 매출 초반→후반 {_ts["change_pct"]:+.1f}% (각 {_h}일 평균 · 요일 구성 균등)')
+            _obs.append(f'매출 초반→후반 {_ts["change_pct"]:+.1f}% (각 {_h}일 평균 · 요일 구성 균등)')
         if _bs['can_compute']:
-            _obs.append(f'업데이트 영향권 제외 기저 수준: ${_bs["mean"]:,.0f}/일 ({_bs["day_count"]}일 샘플)')
+            _obs.append(f'업데이트 기간 제외 평소 매출 수준: \\${_bs["mean"]:,.0f}/일 ({_bs["day_count"]}일 샘플)')
         if _ds['can_compare']:
             _obs.append(f'DAU 초반→후반 {_ds["change_pct"]:+.1f}%')
         _n_p = sum(1 for _r in _pers if _r['has_data'])

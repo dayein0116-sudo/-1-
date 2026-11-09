@@ -28,11 +28,52 @@ def render(env):
     idx = st.selectbox('업데이트 선택', range(len(ups)),
                        format_func=lambda i: f"{ups[i]['date']} · {ups[i]['title']}", key='struct_upd_sel')
     u_sel = ups[idx]
+
+    # ── 업데이트 주기 매출 (업데이트 비교 화면과 동일한 집계 기준) ──
+    cy_sel = next((c for c in env.rev_cycles if c['date'] == u_sel['date']), None)
+    if cy_sel:
+        is_first = (u_sel['date'] == env.rev_cycles[0]['date'])
+        if is_first and env.pre_period and cy_sel['daily_avg']:
+            pct = (cy_sel['daily_avg'] / env.pre_period['daily_avg'] - 1) * 100
+            chg = f"{pct:+.1f}% (초기 운영 기간 대비)"
+            prev_avg = env.pre_period['daily_avg']
+        elif cy_sel['can_compare'] and cy_sel['change_pct'] is not None:
+            chg = f"{cy_sel['change_pct']:+.1f}%"
+            prev_avg = cy_sel.get('prev_daily_avg')
+        elif not cy_sel['complete']:
+            chg = '비교 불가 — 주기 미완료'
+            prev_avg = cy_sel.get('prev_daily_avg')
+        else:
+            chg = '비교 기준 없음 (첫 주기)'
+            prev_avg = None
+        scope_txt = (f'공통 {len(env.ctx.common)}개국' if env.scope == 'common'
+                     else '전체 국가 매출(기타 포함)')
+        with st.container(key='card_struct_rev'):
+            ui.card_title('업데이트 주기 매출', '업데이트 비교 화면과 동일한 집계 기준')
+            st.caption(f'집계 범위: {scope_txt}  ·  원화 환산: 1달러 = 1,350원')
+            ui.table(pd.DataFrame([{
+                '기간': f"{cy_sel['d_start'][5:]}~{cy_sel['d_end'][5:]}",
+                '일수': f"{cy_sel['valid_days']}/{cy_sel['days']}일",
+                '주기 합계': ui.fmt_krw(cy_sel['total']),
+                '일평균': ui.fmt_krw(cy_sel['daily_avg']),
+                '직전 주기 일평균': ui.fmt_krw(prev_avg),
+                '직전 주기 대비': chg,
+            }]))
+            if is_first and env.pre_period:
+                st.caption(
+                    f"초기 운영 기간 ({env.pre_period['d_start'][5:]}~{env.pre_period['d_end'][5:]}, "
+                    f"{env.pre_period['days']}일) 일평균: {ui.fmt_krw(env.pre_period['daily_avg'])}"
+                )
+
     for cat in cats:
         its = u_sel['items_detail'].get(cat, [])
         if its:
-            st.markdown(f'**{cat}**')
-            st.markdown(_cell(its), unsafe_allow_html=True)
+            # 제목+목록을 하나의 블록으로 — Streamlit 단락 간격 없이 카테고리 간 여백만 확보
+            st.markdown(
+                f'<div style="margin-top:1rem"><strong>{esc(cat)}</strong>'
+                + _cell(its) + '</div>',
+                unsafe_allow_html=True,
+            )
 
     # 전체 비교표 (접기)
     with st.expander('전체 업데이트 비교표 펼쳐 보기'):

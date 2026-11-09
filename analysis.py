@@ -444,7 +444,6 @@ def timing_flags(upd, updates, window, series=None):
             r2, r1 = series.get(d - pd.Timedelta(days=2), np.nan), series.get(d - pd.Timedelta(days=1), np.nan)
             if not (pd.isna(r2) or pd.isna(r1)):
                 flags.append({'kind': '업데이트 직전', 'text': f'업데이트 직전 D-2는 직전 {n}일 일평균 대비 {(r2 / base - 1) * 100:+.0f}%, D-1은 {(r1 / base - 1) * 100:+.0f}%입니다 (업데이트 전에 이미 움직였는지 확인용).'})
-    flags.append({'kind': '요일', 'text': f'업데이트일(D0)은 {"월화수목금토일"[d.dayofweek]}요일입니다. 직전·이후 {n}일에는 각 요일이 한 번씩 들어가지만(n=7일 때) 연휴·프로모션 영향은 별도로 남습니다.'})
     return flags
 
 

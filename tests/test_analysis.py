@@ -803,7 +803,16 @@ def test_fmt_krw_man_unit_rounding():
 
 
 def test_fmt_krw_none():
-    assert _ui.fmt_krw(None) == '분析 불가'
+    assert _ui.fmt_krw(None) == '분석 불가'  # Korean 석, not Chinese 析
+
+
+def test_fmt_krw_delta_none_korean():
+    assert _ui.fmt_krw_delta(None) == '분석 불가'  # Korean 석, not Chinese 析
+
+
+def test_fmt_dau_none_korean():
+    result = _ui.fmt_dau(None)
+    assert result == '분석 불가', f'Chinese char bug: got {result!r}'
 
 
 def test_fmt_krw_delta_cookierun_1008():

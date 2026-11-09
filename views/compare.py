@@ -45,15 +45,13 @@ def render(env):
         )
 
     # ── 업데이트 주기별 추정 매출 ──
-    # cutoff_date와 next_update_date 모두 명시적으로 전달:
-    # - cutoff_date: mid-cycle truncation 감지 (마지막 업데이트와 구분)
-    # - next_update_date: 마지막 주기의 전체 예정 일수 확정 (days vs valid_days 분리)
-    cycles = an.cycle_compare(rs, ups, cutoff_date=cutoff_str,
-                              next_update_date=env.data.next_update_date)
+    # app.py에서 scope 확정 후 한 번 계산해 env에 담은 값을 재사용한다.
+    cycles = env.rev_cycles
+    pre_period = env.pre_period
 
     rows, curs, prevs, labels = [], [], [], []
     asterisk_notes = []
-    for cy in cycles:
+    for i, cy in enumerate(cycles):
         needs_asterisk = not cy['complete']
         star = '*' if needs_asterisk else ''
         v, d = cy['valid_days'], cy['days']
@@ -65,10 +63,22 @@ def render(env):
         else:
             status = f'진행 중 ({v}일)'
 
-        if cy['can_compare'] and cy['change_pct'] is not None:
+        # 첫 주기에 초기 운영 기간이 있으면 그 대비 변화율을 계산
+        if i == 0 and pre_period and cy['daily_avg']:
+            pct = (cy['daily_avg'] / pre_period['daily_avg'] - 1) * 100
+            change_str = f"{pct:+.1f}% (초기 운영 기간 대비)"
+            prev_bar = pre_period['daily_avg'] * ui.KRW_RATE / 1e8
+        elif cy['can_compare'] and cy['change_pct'] is not None:
             change_str = f"{cy['change_pct']:+.1f}%"
-        else:
+            prev_bar = cy['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cy.get('prev_daily_avg') else None
+        elif not cy['complete']:
+            # 주기 자체가 미완료 (진행 중 또는 부분 집계)
             change_str = '비교 불가 — 주기 미완료'
+            prev_bar = cy['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cy.get('prev_daily_avg') else None
+        else:
+            # 주기는 완료됐지만 비교할 직전 주기가 없거나 직전 주기가 미완료
+            change_str = '비교 기준 없음 (첫 주기)'
+            prev_bar = None
 
         rows.append({
             '날짜': cy['date'],
@@ -83,17 +93,19 @@ def render(env):
         # 차트 라벨에도 별표 적용
         labels.append(cy['date'][5:] + star)
         curs.append(cy['daily_avg'] * ui.KRW_RATE / 1e8 if cy['daily_avg'] else None)
-        prevs.append(cy['prev_daily_avg'] * ui.KRW_RATE / 1e8 if cy.get('prev_daily_avg') else None)
+        prevs.append(prev_bar)
 
         note = _asterisk_note(cy, cutoff_reason)
         if note:
             asterisk_notes.append(note)
 
+    scope_txt = (f'공통 {len(ctx.common)}개국: {", ".join(ctx.common)}'
+                 if env.scope == 'common' else '전체 국가 매출(기타 포함)')
     with st.container(key='card_cmp_rev'):
-        ui.card_title(
-            '추정 매출 — 업데이트 주기별',
-            f'D0~다음D0-1 성과 · 직전 주기 대비 변화율은 일평균 추정 매출 기준 · 일수 = 유효/전체 · 원화 환산 (1 USD = 1,350원) · {env.rep["rev_scope_label"]}'
-        )
+        ui.card_title('업데이트 주기별 매출 비교',
+                      '각 업데이트일부터 다음 업데이트 전날까지의 매출을 비교합니다.')
+        st.caption('변화율 기준: 업데이트 주기마다 기간이 다를 수 있어, 이전 주기와의 변화율은 하루 평균 매출을 기준으로 계산합니다.')
+        st.caption(f'집계 일수: 데이터가 있는 일수 / 전체 기간  ·  분석 범위: {scope_txt}  ·  원화 환산: 1달러 = 1,350원')
         ui.table(pd.DataFrame(rows))
         ui.show(charts.fig_group_bars(labels, prevs, curs, '직전 주기 일평균', '이번 주기 일평균', charts.BLUE, unit='억원'))
         # 별표 각주
@@ -103,30 +115,81 @@ def render(env):
         if any(cy['truncated'] for cy in cycles) or any(not cy['complete'] for cy in cycles):
             st.caption('* 표시 업데이트는 주기가 완료되지 않아 직전 완료 주기와 성과를 직접 비교하지 않습니다.')
 
-    # ── DAU (달력 주 기준 — 기존 유지) ──
-    cur_l, prev_l = report.cal_period_labels()
-    rows_dau, prevs_dau, curs_dau = [], [], []
-    for u in ups:
-        w = an.week_compare_cal(ds, u['date'])
-        prevs_dau.append(w['prev_mean'] if w else None)
-        curs_dau.append(w['cur_mean'] if w else None)
+    # ── DAU (업데이트 주기 기준 — 매출과 동일한 기간) ──
+    dau_cycles = env.dau_cycles
+    pre_dau_period = env.pre_dau_period
+
+    rows_dau, prevs_dau, curs_dau, dau_labels = [], [], [], []
+    for i, dcy in enumerate(dau_cycles):
+        if i == 0 and pre_dau_period and dcy['daily_avg']:
+            pct_d = (dcy['daily_avg'] / pre_dau_period['daily_avg'] - 1) * 100
+            dau_chg = f"{pct_d:+.1f}% (초기 운영 기간 대비)"
+            dau_prev = pre_dau_period['daily_avg']
+        elif dcy['can_compare'] and dcy['change_pct'] is not None:
+            dau_chg = f"{dcy['change_pct']:+.1f}%"
+            dau_prev = dcy.get('prev_daily_avg')
+        elif not dcy['complete']:
+            dau_chg = '비교 불가 — 주기 미완료'
+            dau_prev = dcy.get('prev_daily_avg')
+        else:
+            dau_chg = '비교 기준 없음 (첫 주기)'
+            dau_prev = None
         rows_dau.append({
-            '날짜': u['date'], '업데이트': u['title'],
-            f'{prev_l} 일평균 DAU': f"{w['prev_mean']:,.0f}" if w else '분석 불가',
-            f'{cur_l} 일평균 DAU': f"{w['cur_mean']:,.0f}" if w else '분석 불가',
-            '증감률': fp(w['pct']) if w else '분석 불가',
+            '날짜': dcy['date'], '업데이트': dcy['title'],
+            '직전 주기 일평균 DAU': ui.fmt_dau(dau_prev),
+            '이번 주기 일평균 DAU': ui.fmt_dau(dcy['daily_avg']),
+            '증감률': dau_chg,
         })
-    dau_labels = [u['date'][5:] for u in ups]
+        dau_labels.append(dcy['date'][5:])
+        curs_dau.append(dcy['daily_avg'])
+        prevs_dau.append(dau_prev)
+
+    cur_l, prev_l = report.cal_period_labels()
+    dau_pre_rows = rows_dau
+    dau_all_labels, dau_all_curs, dau_all_prevs = dau_labels, curs_dau, prevs_dau
+
     with st.container(key='card_cmp_dau'):
-        ui.card_title('DAU', f'{cur_l} 일평균 DAU vs {prev_l} 일평균 DAU · {env.rep["dau_scope_label"]}')
-        ui.table(pd.DataFrame(rows_dau))
-        ui.show(charts.fig_group_bars(dau_labels, prevs_dau, curs_dau, prev_l, cur_l, charts.GREEN))
+        ui.card_title('DAU (업데이트 주기 기준)',
+                      '각 업데이트 주기(D0~다음D0-1) 일평균 DAU 비교 · ' + env.rep['dau_scope_label'])
+        st.caption('매출과 동일한 업데이트 주기 기간을 사용합니다.')
+        ui.table(pd.DataFrame(dau_pre_rows))
+        ui.show(charts.fig_group_bars(dau_all_labels, dau_all_prevs, dau_all_curs,
+                                      '직전 주기 일평균', '이번 주기 일평균', charts.GREEN))
         st.caption(report.DAU_NOTE + ' 매출과 결합한 지표(ARPDAU 등)는 계산하지 않습니다.')
+
+    # ── 달력 주(월~일) 기준 DAU 비교 — 보조 참고용 ──
+    with st.expander('달력 주(월~일) 기준 DAU 비교 — 보조 참고용', expanded=False):
+        rows_dau_cal, prevs_dau_cal, curs_dau_cal = [], [], []
+        for u in ups:
+            w = an.week_compare_cal(ds, u['date'])
+            prevs_dau_cal.append(w['prev_mean'] if w else None)
+            curs_dau_cal.append(w['cur_mean'] if w else None)
+            rows_dau_cal.append({
+                '날짜': u['date'], '업데이트': u['title'],
+                f'{prev_l} 일평균 DAU': ui.fmt_dau(w['prev_mean'] if w else None),
+                f'{cur_l} 일평균 DAU': ui.fmt_dau(w['cur_mean'] if w else None),
+                '증감률': fp(w['pct']) if w else '분석 불가',
+            })
+        dau_cal_labels = [u['date'][5:] for u in ups]
+        no_dau_cal = [u['date'][5:] for u in ups if an.week_compare_cal(ds, u['date']) is None]
+        st.caption(
+            f'비교 기준: {prev_l}(직전 월–일) 대비 {cur_l}(D0 포함 월–일) · '
+            f'집계 범위: {env.rep["dau_scope_label"]} · '
+            '달력 주는 D0 요일에 따라 D0 이전 날이 업데이트 주에 포함될 수 있어 주기별 비교와 수치가 다릅니다.'
+        )
+        ui.table(pd.DataFrame(rows_dau_cal))
+        ui.show(charts.fig_group_bars(dau_cal_labels, prevs_dau_cal, curs_dau_cal,
+                                      prev_l, cur_l, charts.GREEN))
+        if no_dau_cal:
+            st.caption(
+                f'막대가 없는 업데이트 ({", ".join(no_dau_cal)}): 달력 기준 전주(월~일) 7일이 '
+                f'CSV 데이터 범위 밖이라 비교 불가입니다.'
+            )
 
     # ── 국가별 추정 매출 (달력 주 기준 — 기존 유지) ──
     with st.container(key='card_cmp_country'):
         ui.card_title(
-            '국가별 추정 매출',
+            '국가별 매출',
             '업데이트 주 금액(원화 환산) 및 증감률 · 달력 주(월~일) 기준 — 증감률만으로 판단하지 말고 규모를 함께 보세요'
         )
         dates = [u['date'][5:] for u in ups]
@@ -181,8 +244,8 @@ def render(env):
             curs_cal.append(w['cur_sum'] * ui.KRW_RATE / 1e8 if w else None)
             rows_cal.append({
                 '날짜': u['date'], '업데이트': u['title'],
-                f'{prev_l} 추정 매출 합계': ui.fmt_krw(w['prev_sum'] if w else None),
-                f'{cur_l} 추정 매출 합계': ui.fmt_krw(w['cur_sum'] if w else None),
+                f'{prev_l} 매출 합계': ui.fmt_krw(w['prev_sum'] if w else None),
+                f'{cur_l} 매출 합계': ui.fmt_krw(w['cur_sum'] if w else None),
                 '증감액': ui.fmt_krw_delta(w['cur_sum'] - w['prev_sum'] if w else None),
                 '증감률': fp(w['pct']) if w else '분석 불가',
             })
